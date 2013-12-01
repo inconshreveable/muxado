@@ -55,7 +55,8 @@ muxado sessions and streams implement the net.Listener and net.Conn interfaces (
     http.Serve(sess.NetListener(), handler)
 
 ## A more extensive muxado client
-    sess, err := muxado.Dial("tcp", ":1234")
+    // open a new session to a remote endpoint
+    sess, err := muxado.Dial("tcp", "example.com:1234")
     if err != nil {
 	    panic(err)
     }
@@ -73,7 +74,7 @@ muxado sessions and streams implement the net.Listener and net.Conn interfaces (
     }()
 
     // open new streams for application requests
-    for req <- requests {
+    for req := range requests {
 	    stream, err := sess.Open()
 	    if err != nil {
 		    panic(err)
