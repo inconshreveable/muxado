@@ -1,22 +1,23 @@
 # muxado - Stream multiplexing for Go
 
 ## What is stream multiplexing?
-Imagine you have a single, bi-directional stream of bytes like a TCP connection. Stream multiplexing
+Imagine you have a single stream (a bi-directional stream of bytes) like a TCP connection. Stream multiplexing
 is a method for enabling the transmission of multiple simultaneous streams over the one underlying transport stream.
 
 ## What is muxado?
-muxado is an implementation of a stream multiplexing library in Go that can be layered on top of a net.Conn to multiplexing that stream.
+muxado is an implementation of a stream multiplexing library in Go that can be layered on top of a net.Conn to multiplex that stream.
 muxado's protocol is not currently documented explicitly, but it is very nearly an implementation of the HTTP2
 framing layer with all of the HTTP-specific bits removed. It is heavily inspired by HTTP2, SPDY, and WebMUX.
 
 ## How does it work?
 Simplifying, muxado chunks data sent over each multiplexed stream and transmits each piece
-as a "frame" over the transport stream. It then sends these frames for multiple streams, interleaved to
-the remote side. The remote endpoint then reassembles the frames into
-distinct streams of data which are presented to the application layer.
+as a "frame" over the transport stream. It then sends these frames,
+often interleaving data for multiple streams, to the remote side.
+The remote endpoint then reassembles the frames into distinct streams
+of data which are presented to the application layer.
 
 ## What good is it anyways?
-A stream multiplexing library is a powerful tool in an application developer's toolbox for a number of purposes:
+A stream multiplexing library is a powerful tool for an application developer's toolbox which solves a number of problems:
 
 - It allows developers to implement asynchronous/pipelined protocols with ease. Instead of matching requests with responses in your protocols, just open a new stream for each request and communicate over that.
 - muxado can do application-level keep-alives and dead-session detection so that you don't have to write heartbeat code ever again.
@@ -24,7 +25,7 @@ A stream multiplexing library is a powerful tool in an application developer's t
 - muxado allows the server to initiate new streams to clients which is normally very difficult without NAT-busting trickery.
 
 ## What does the API look like?
-As much as possible, the muxado library strives to look and feel just like the standard library's net package. Here's how you initiate a new client connection:
+As much as possible, the muxado library strives to look and feel just like the standard library's net package. Here's how you initiate a new client session:
 
     sess, err := muxado.DialTLS("tcp", "example.com:1234", tlsConfig)
     
@@ -55,6 +56,7 @@ muxado sessions and streams implement the net.Listener and net.Conn interfaces (
     http.Serve(sess.NetListener(), handler)
 
 ## A more extensive muxado client
+
     // open a new session to a remote endpoint
     sess, err := muxado.Dial("tcp", "example.com:1234")
     if err != nil {
@@ -101,7 +103,7 @@ muxado sessions and streams implement the net.Listener and net.Conn interfaces (
 muxado is a modified implementation of the HTTP2 framing protocol with all of the HTTP-specific bits removed. It aims
 for simplicity in the protocol by removing everything that is not core to multiplexing streams. The muxado code
 is also built with the intention that its performance should be moderately good within the bounds of working in Go. As a result,
-muxado does contain some unidiomatic code which is commented on where possible.
+muxado does contain some unidiomatic code.
 
 ## What are its biggest drawbacks?
 Any stream-multiplexing library over TCP will suffer from head-of-line blocking if the next packet to service gets dropped.
