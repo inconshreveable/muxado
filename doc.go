@@ -18,7 +18,8 @@
 //
 // Perhaps the best part of muxado is the interface exposed to client libraries. Since new
 // streams may be initiated by both sides at any time, a muxado.Session implements the net.Listener
-// interface. Each muxado stream implements the net.Conn interface. This allows you to integrate
+// interface (almost! Go unfortunately doesn't support covariant interface satisfaction so there's
+// a shim). Each muxado stream implements the net.Conn interface. This allows you to integrate
 // muxado into existing code which works with these interfaces (which is most Golang networking code)
 // with very little difficulty. Consider the following toy example. Here we'll initiate a new secure
 // connection to a server, and then ask it which application it wants via an HTTP request over a muxado stream
@@ -49,7 +50,7 @@
 // - eliminating custom NAT traversal logic for enabling server-initiated streams
 //
 // muxado has been tuned to be very performant within the limits of what you can expect of pure-Go code.
-// Some of muxado's code look unidiomatic in the quest for better performance. (Locks over channels, never allocating
+// Some of muxado's code looks unidiomatic in the quest for better performance. (Locks over channels, never allocating
 // from the heap, etc). muxado will typically outperform TCP connections when rapidly initiating many new
 // streams with small payloads. When sending a large payload over a single stream, muxado's worst case, it can
 // be 2-3x slower and does not parallelize well.
