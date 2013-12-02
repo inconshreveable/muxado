@@ -24,7 +24,7 @@ A stream multiplexing library is a powerful tool for an application developer's 
 - You never need to build connection pools for services running your protocol. You can open as many independent, concurrent streams as you need without incurring any round-trip latency costs.
 - muxado allows the server to initiate new streams to clients which is normally very difficult without NAT-busting trickery.
 
-## What does the API look like?
+## Show me the code!
 As much as possible, the muxado library strives to look and feel just like the standard library's net package. Here's how you initiate a new client session:
 
     sess, err := muxado.DialTLS("tcp", "example.com:1234", tlsConfig)
@@ -104,6 +104,11 @@ muxado is a modified implementation of the HTTP2 framing protocol with all of th
 for simplicity in the protocol by removing everything that is not core to multiplexing streams. The muxado code
 is also built with the intention that its performance should be moderately good within the bounds of working in Go. As a result,
 muxado does contain some unidiomatic code.
+
+## API documentation
+API documentation is available on godoc.org:
+
+[muxado API documentation](https://godoc.org/github.com/inconshreveable/muxado)
 
 ## What are its biggest drawbacks?
 Any stream-multiplexing library over TCP will suffer from head-of-line blocking if the next packet to service gets dropped.
