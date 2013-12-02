@@ -77,12 +77,12 @@ muxado sessions and streams implement the net.Listener and net.Conn interfaces (
 
     // open new streams for application requests
     for req := range requests {
-	    stream, err := sess.Open()
+	    str, err := sess.Open()
 	    if err != nil {
 		    panic(err)
 	    }
 
-	    go func() {
+	    go func(stream muxado.Stream) {
 		    defer stream.Close()
 
 		    // send request
@@ -96,7 +96,7 @@ muxado sessions and streams implement the net.Listener and net.Conn interfaces (
 		    }
 
 		    handleResponse(buf)
-	    }()
+	    }(str)
     }
 
 ## How did you build it?
