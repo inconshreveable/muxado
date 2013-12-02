@@ -64,12 +64,10 @@ func NewStream(id, related frame.StreamId, priority frame.StreamPriority, finLoc
 	return str
 }
 
-// Write writes the bytes in the given buffer to the stream
 func (s *Stream) Write(buf []byte) (n int, err error) {
 	return s.write(buf, false)
 }
 
-// Read fills the buffer with the next bytes read from the stream
 func (s *Stream) Read(buf []byte) (n int, err error) {
 	// read from the buffer
 	n, err = s.inBuffer.Read(buf)
@@ -96,7 +94,6 @@ func (s *Stream) Close() error {
 	return nil
 }
 
-// SetDeadline sets a time after which Read and Write operations will fail with a timeout error
 func (s *Stream) SetDeadline(deadline time.Time) (err error) {
 	if err = s.SetReadDeadline(deadline); err != nil {
 		return
@@ -107,7 +104,6 @@ func (s *Stream) SetDeadline(deadline time.Time) (err error) {
 	return
 }
 
-// SetReadDeadline sets a time after which Read operations will fail with a timeout error
 func (s *Stream) SetReadDeadline(dl time.Time) error {
 	s.inBuffer.SetDeadline(dl)
 	return nil
@@ -120,35 +116,26 @@ func (s *Stream) SetWriteDeadline(dl time.Time) error {
 	return nil
 }
 
-// HalfClose writes the given bytes to the stream and closes the local side.
-// Future calls to Write will fail.
 func (s *Stream) HalfClose(buf []byte) (n int, err error) {
 	return s.write(buf, true)
 }
 
-// Id returns the stream's 31-bit id
 func (s *Stream) Id() frame.StreamId {
 	return s.id
 }
 
-// RelatedStreamId returns the related stream's id
 func (s *Stream) RelatedStreamId() frame.StreamId {
 	return s.relatedStreamId
 }
 
-// Session returns a pointer to this stream's parent session
 func (s *Stream) Session() ISession {
 	return s.session
 }
 
-// LocalAddr returns the local address of the underlying connection over
-// which the stream is running
 func (s *Stream) LocalAddr() net.Addr {
 	return s.session.LocalAddr()
 }
 
-// RemoteAddr returns the remote address of the underlying connection over
-// which the stream is running
 func (s *Stream) RemoteAddr() net.Addr {
 	return s.session.RemoteAddr()
 }

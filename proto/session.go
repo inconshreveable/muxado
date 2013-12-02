@@ -97,12 +97,10 @@ func NewSession(conn net.Conn, newStream streamFactory, isClient bool) ISession 
 // public interface
 ////////////////////////////////
 
-// Open opens a new stream on the session
 func (s *Session) Open() (IStream, error) {
 	return s.OpenStream(0, 0, false)
 }
 
-// Opens a new stream
 func (s *Session) OpenStream(priority frame.StreamPriority, relatedStreamId frame.StreamId, fin bool) (ret IStream, err error) {
 	// check if the remote has gone away
 	if atomic.LoadInt32(&s.remote.goneAway) == 1 {
@@ -143,7 +141,6 @@ func (s *Session) OpenStream(priority frame.StreamPriority, relatedStreamId fram
 	return str, nil
 }
 
-// Accept returns the next stream sent from the remote side
 func (s *Session) Accept() (str IStream, err error) {
 	var ok bool
 	if str, ok = <-s.accept; !ok {
@@ -153,31 +150,14 @@ func (s *Session) Accept() (str IStream, err error) {
 	return
 }
 
-// Kill closes the underlying transport stream immediately.
-//
-// You SHOULD always perfer to call Close() instead so that the connection
-// closes cleanly by sending a GoAway frame.
 func (s *Session) Kill() error {
 	return s.transport.Close()
 }
 
-// Close instructs the session to close cleanly, sending a GoAway frame if one hasn't already been sent.
-//
-// This implementation does not "linger". Pending writes on streams may fail.
-//
-// You MAY call Close() more than once. Each time after
-// the first, Close() will return an error.
 func (s *Session) Close() error {
 	return s.die(frame.NoError, fmt.Errorf("Session Close()"))
 }
 
-// GoAway instructs the other side of the connection to stop
-// initiating new streams by sending a GoAway frame. Most clients
-// will just call Close(), but you may want explicit control of this
-// in order to facilitate clean shutdowns.
-//
-// You MAY call GoAway() more than once. Each time after the first,
-// GoAway() will return an error.
 func (s *Session) GoAway(errorCode frame.ErrorCode, debug []byte) (err error) {
 	if !atomic.CompareAndSwapInt32(&s.local.goneAway, 0, 1) {
 		return fmt.Errorf("Already sent GoAway!")
