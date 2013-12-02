@@ -26,15 +26,15 @@
 // and then serve an entire HTTP application *to the server*.
 //
 //
-// sess, err := muxado.DialTLS("tcp", "example.com:1234", new(tls.Config))
-// client := &http.Client{Transport: &http.Transport{Dial: sess.NetDial}}
-// resp, err := client.Get("http://example.com/appchoice")
-// switch getChoice(resp.Body) {
-// case "foo":
-// 	http.Serve(sess.NetListener(), fooHandler)
-// case "bar":
-//	http.Serve(sess.NetListener(), barHandler)
-// }
+// 	sess, err := muxado.DialTLS("tcp", "example.com:1234", new(tls.Config))
+// 	client := &http.Client{Transport: &http.Transport{Dial: sess.NetDial}}
+// 	resp, err := client.Get("http://example.com/appchoice")
+// 	switch getChoice(resp.Body) {
+// 	case "foo":
+// 		http.Serve(sess.NetListener(), fooHandler)
+// 	case "bar":
+//		http.Serve(sess.NetListener(), barHandler)
+// 	}
 //
 //
 // In addition to enabling multiple streams over a single connection, muxado enables other
