@@ -62,3 +62,9 @@ func ListenTLS(network, addr string, tlsConfig *tls.Config) (*Listener, error) {
 
 	return &Listener{l}, nil
 }
+
+// NewListener creates a new muxado listener which creates new muxado server sessions 
+// by accepting connections from the given net.Listener
+func NewListener(l net.Listener) (*Listener) {
+	return &Listener{l}
+}

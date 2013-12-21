@@ -403,6 +403,6 @@ func (a *netListenerAdaptor) Addr() net.Addr {
 }
 
 func (a *netListenerAdaptor) Accept() (net.Conn, error) {
-	str, err := a.Accept()
+	str, err := a.Session.Accept()
 	return net.Conn(str), err
 }

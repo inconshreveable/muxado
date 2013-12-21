@@ -1,6 +1,6 @@
-For launch:
-include muxado pun somewhere
-
+improve the formatting of the docs to look nice for godoc
+use a better example in the docs first before showing the clever integration with the net.Listener/net.Conn APIs
+Make all errors support Temporary() API so applications can better decide what to do
 Add support for extensions
 Add heartbeat
 Handle case of running out of stream ids + test
@@ -27,3 +27,4 @@ Write frame/goaway tests
 - Eliminate unlikely race on s.remoteDebug between handleFrame() and die()
 - Should writeFrame calls for rst/wndinc set the write deadline?
 - don't send reset if the stream is fully closed
+- include muxado pun somewhere in the docs

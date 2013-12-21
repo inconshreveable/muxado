@@ -239,3 +239,26 @@ func TestNetListener(t *testing.T) {
 		http.Serve(s.NetListener(), nil)
 	}
 }
+
+func TestNetListenerAccept(t *testing.T) {
+	t.Parallel()
+	local, remote := newFakeConnPair()
+
+	sLocal := NewSession(local, NewStream, false)
+	sRemote := NewSession(remote, NewStream, true)
+
+	go func() {
+		_, err := sRemote.Open()
+		if err != nil {
+			t.Errorf("Failed to open stream: %v", err)
+			return
+		}
+	}()
+
+	l := sLocal.NetListener()
+
+	_, err := l.Accept()
+	if err != nil {
+		t.Fatalf("Failed to accept stream: %v", err)
+	}
+}
