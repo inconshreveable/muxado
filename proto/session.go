@@ -262,6 +262,15 @@ func (s *Session) die(errorCode frame.ErrorCode, err error) error {
 func (s *Session) reader() {
 	defer s.recoverPanic("reader()")
 
+	// close all of the extension accept channels when we're done
+	// we do this here instead of in die() since otherwise it wouldn't 
+    // be safe to access s.exts
+	defer func() {
+		for _, extAccept := range s.exts {
+			close(extAccept)
+		}
+	}()
+
 	for {
 		f, err := s.transport.ReadFrame()
 		if err != nil {
