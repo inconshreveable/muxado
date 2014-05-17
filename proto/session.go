@@ -2,13 +2,14 @@ package proto
 
 import (
 	"fmt"
-	"github.com/inconshreveable/muxado/proto/frame"
 	"io"
 	"net"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/inconshreveable/muxado/proto/frame"
 )
 
 const (
@@ -157,7 +158,7 @@ func (s *Session) OpenStream(priority frame.StreamPriority, streamType frame.Str
 func (s *Session) Accept() (str IStream, err error) {
 	var ok bool
 	if str, ok = <-s.accept; !ok {
-		return nil, fmt.Errorf("Session closed")
+		return nil, io.EOF
 	}
 
 	return
@@ -247,7 +248,7 @@ func (s *Session) die(errorCode frame.ErrorCode, err error) error {
 
 	// notify all of the streams that we're closing
 	s.streams.Each(func(id frame.StreamId, str stream) {
-		str.closeWith(fmt.Errorf("Session closed"))
+		str.closeWith(io.EOF)
 	})
 
 	s.dead <- deadReason{errorCode, err, s.remoteDebug}
