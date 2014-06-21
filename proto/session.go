@@ -2,13 +2,14 @@ package proto
 
 import (
 	"fmt"
-	"github.com/inconshreveable/muxado/proto/frame"
 	"io"
 	"net"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/inconshreveable/muxado/proto/frame"
 )
 
 const (
@@ -50,19 +51,27 @@ type halfState struct {
 	lastId   uint32 // last id used/seen from one half of the session
 }
 
+type writeReq struct {
+	f   frame.WFrame
+	dl  time.Time
+	err chan error
+}
+
 // Session implements a simple streaming session manager. It has the following characteristics:
 //
 // - When closing the Session, it does not linger, all pending write operations will fail immediately.
 // - It completely ignores stream priority when processing and writing frames
 // - It offers no customization of settings like window size/ping time
 type Session struct {
+	wr                sync.Mutex
 	conn              net.Conn                         // connection the transport is running over
 	transport         frame.Transport                  // transport
 	streams           StreamMap                        // all active streams
 	local             halfState                        // client state
 	remote            halfState                        // server state
 	syn               *frame.WStreamSyn                // STREAM_SYN frame for opens
-	wr                sync.Mutex                       // synchronization when writing frames
+	streamMutex       sync.Mutex                       // synchronization when opening streams
+	writes            chan writeReq                    // request to write a frame
 	accept            chan stream                      // new streams opened by the remote
 	diebit            int32                            // true if we're dying
 	remoteDebug       []byte                           // debugging data sent in the remote's GoAway frame
@@ -87,6 +96,7 @@ func NewSession(conn net.Conn, newStream streamFactory, isClient bool, exts []Ex
 		newStream:         newStream,
 		dead:              make(chan deadReason, 1), // don't block die() if there is no Wait call
 		exts:              make(map[frame.StreamType]chan stream),
+		writes:            make(chan writeReq, 64),
 	}
 
 	if isClient {
@@ -102,6 +112,7 @@ func NewSession(conn net.Conn, newStream streamFactory, isClient bool, exts []Ex
 	}
 
 	go sess.reader()
+	go sess.writer()
 
 	return sess
 }
@@ -126,10 +137,30 @@ func (s *Session) OpenStream(priority frame.StreamPriority, streamType frame.Str
 	//                  - inc stream id
 	//                  - send streamsyn
 	// - send streamsyn
-	s.wr.Lock()
+	s.streamMutex.Lock()
 
 	// get the next id we can use
 	nextId := frame.StreamId(atomic.AddUint32(&s.local.lastId, 2))
+
+	// write the frame
+	syn := frame.NewWStreamSyn()
+	//if err = s.syn.Set(nextId, priority, streamType, fin); err != nil {
+	if err = syn.Set(nextId, priority, streamType, fin); err != nil {
+		s.streamMutex.Unlock()
+		s.die(frame.InternalError, err)
+		return
+	}
+
+	errChan := s.asyncWriteFrame(syn, zeroTime)
+
+	// release lock as quickly as possible
+	s.streamMutex.Unlock()
+
+	err = <-errChan
+	if err != nil {
+		s.die(frame.InternalError, err)
+		return
+	}
 
 	// make the stream
 	str := s.newStream(nextId, priority, streamType, fin, false, s.defaultWindowSize, s)
@@ -137,20 +168,6 @@ func (s *Session) OpenStream(priority frame.StreamPriority, streamType frame.Str
 	// add to to the stream map
 	s.streams.Set(nextId, str)
 
-	// write the frame
-	if err = s.syn.Set(nextId, priority, streamType, fin); err != nil {
-		s.wr.Unlock()
-		s.die(frame.InternalError, err)
-		return
-	}
-
-	if err = s.transport.WriteFrame(s.syn); err != nil {
-		s.wr.Unlock()
-		s.die(frame.InternalError, err)
-		return
-	}
-
-	s.wr.Unlock()
 	return str, nil
 }
 
@@ -176,22 +193,18 @@ func (s *Session) GoAway(errorCode frame.ErrorCode, debug []byte) (err error) {
 		return fmt.Errorf("Already sent GoAway!")
 	}
 
-	s.wr.Lock()
 	f := frame.NewWGoAway()
 	remoteId := frame.StreamId(atomic.LoadUint32(&s.remote.lastId))
 	if err = f.Set(remoteId, errorCode, debug); err != nil {
-		s.wr.Unlock()
 		s.die(frame.InternalError, err)
 		return
 	}
 
-	if err = s.transport.WriteFrame(f); err != nil {
-		s.wr.Unlock()
+	if err = s.writeFrame(f, zeroTime); err != nil {
 		s.die(frame.InternalError, err)
 		return
 	}
 
-	s.wr.Unlock()
 	return
 }
 
@@ -221,12 +234,23 @@ func (s *Session) removeStream(id frame.StreamId) {
 }
 
 // writeFrame writes the given frame to the transport and returns the error from the write operation
-func (s *Session) writeFrame(f frame.WFrame, dl time.Time) (err error) {
-	s.wr.Lock()
-	s.conn.SetWriteDeadline(dl)
-	err = s.transport.WriteFrame(f)
-	s.wr.Unlock()
-	return
+func (s *Session) writeFrame(f frame.WFrame, dl time.Time) error {
+	return <-s.asyncWriteFrame(f, dl)
+}
+
+func (s *Session) asyncWriteFrame(f frame.WFrame, dl time.Time) chan error {
+	errChan := make(chan error)
+	s.writes <- writeReq{f, dl, errChan}
+	return errChan
+	/*
+		s.wr.Lock()
+		s.conn.SetWriteDeadline(dl)
+		err := s.transport.WriteFrame(f)
+		s.wr.Unlock()
+		errChan := make(chan error)
+		go func() { errChan <- err }()
+		return errChan
+	*/
 }
 
 // die closes the session cleanly with the given error and protocol error code
@@ -289,6 +313,17 @@ func (s *Session) reader() {
 	}
 }
 
+func (s *Session) writer() {
+	for req := range s.writes {
+		s.conn.SetWriteDeadline(req.dl)
+		err := s.transport.WriteFrame(req.f)
+		req.err <- err
+		if err != nil {
+			return
+		}
+	}
+}
+
 func (s *Session) handleFrame(rf frame.RFrame) {
 	switch f := rf.(type) {
 	case *frame.RStreamSyn:
@@ -300,8 +335,9 @@ func (s *Session) handleFrame(rf frame.RFrame) {
 			return
 		}
 
-		if f.StreamId() <= frame.StreamId(atomic.LoadUint32(&s.remote.lastId)) {
-			s.die(frame.ProtocolError, fmt.Errorf("Stream id %d is less than last remote id.", f.StreamId()))
+		lastRemoteId := atomic.LoadUint32(&s.remote.lastId)
+		if f.StreamId() <= frame.StreamId(lastRemoteId) {
+			s.die(frame.ProtocolError, fmt.Errorf("Stream id %d is less than last remote id %d.", f.StreamId(), lastRemoteId))
 			return
 		}
 
@@ -329,9 +365,7 @@ func (s *Session) handleFrame(rf frame.RFrame) {
 					s.die(frame.InternalError, err)
 				}
 
-				s.wr.Lock()
-				defer s.wr.Unlock()
-				s.transport.WriteFrame(fRst)
+				s.writeFrame(fRst, zeroTime)
 			} else {
 				extAccept <- str
 			}
@@ -358,9 +392,7 @@ func (s *Session) handleFrame(rf frame.RFrame) {
 				s.die(frame.InternalError, err)
 			}
 
-			s.wr.Lock()
-			defer s.wr.Unlock()
-			s.transport.WriteFrame(fRst)
+			s.writeFrame(fRst, zeroTime)
 			return
 		}
 
