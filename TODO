@@ -1,3 +1,8 @@
+Performance ideas:
+    use buffered io
+    copy data for write and issue one write call if data size is small (copy co
+    move high throughput connections to their own connections
+
 improve the formatting of the docs to look nice for godoc
 use a better example in the docs first before showing the clever integration with the net.Listener/net.Conn APIs
 Make all errors support Temporary() API so applications can better decide what to do

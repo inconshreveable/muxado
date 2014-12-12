@@ -4,7 +4,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/inconshreveable/muxado/proto/frame"
+	"github.com/inconshreveable/muxado/frame"
 )
 
 type StreamId frame.StreamId
@@ -18,11 +18,11 @@ type Stream interface {
 	// Read reads the next bytes on the stream into the given buffer
 	Read([]byte) (int, error)
 
-	// Closes the stream. The semantics of close are implementation dependent.
-	// It attempts to behave as Close does for a TCP conn in that it half-closes
-	// the stream for sending, and it will send an RST if any more data is
-	// received from the remote side.
+	// Closes the stream.
 	Close() error
+
+	// Half-closes the stream. Calls to Write will fail after this is invoked.
+	CloseWrite() error
 
 	// SetDeadline sets a time after which future Read and Write operations will
 	// fail.
@@ -76,23 +76,19 @@ type Session interface {
 	// Accept returns the next stream initiated by the remote side
 	AcceptStream() (Stream, error)
 
-	// Kill closes the underlying transport stream immediately.
-	//
-	// You should perfer to call Close() for graceful session termination.
-	Kill() error
-
-	// Close instructs the session to close cleanly, if possible by the
-	// implementation.
+	// Attempts to close the Session cleanly. Closes the underlying stream transport.
 	Close() error
 
-	// LocalAddr returns the local address of the transport stream over which
-	// the session is running.
+	// LocalAddr returns the local address of the transport stream over which the session is running.
 	LocalAddr() net.Addr
 
 	// RemoteAddr returns the address of the remote side of the transport stream over which the session is running.
 	RemoteAddr() net.Addr
 
+	// Addr returns the session transport's local address
+	Addr() net.Addr
+
 	// Wait blocks until the session has shutdown and returns an error
 	// explaining the session termination.
-	Wait() error
+	Wait() (error, ErrorCode, []byte)
 }
