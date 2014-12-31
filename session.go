@@ -55,7 +55,7 @@ type session struct {
 	defaultWindowSize uint32             // window size when creating new streams
 	newStream         streamFactory      // factory function to make new streams
 	isLocal           parityFn           // determines if a stream id is local or remote
-	writeFrames       chan *writeReq     // write requests for the framer
+	writeFrames       chan writeReq      // write requests for the framer
 
 	dead   chan struct{} // closed when dead
 	dieErr error         // the first error that caused session termination
@@ -81,7 +81,7 @@ func newSession(transport io.ReadWriteCloser, newStream streamFactory, isClient 
 		accept:            make(chan streamPrivate, defaultAcceptQueueDepth),
 		defaultWindowSize: defaultWindowSize,
 		newStream:         newStream,
-		writeFrames:       make(chan *writeReq, 64),
+		writeFrames:       make(chan writeReq, 64),
 		remoteErrorCode:   ErrorUnspecified,
 		dead:              make(chan struct{}),
 	}
@@ -138,17 +138,8 @@ func (s *session) OpenStream() (Stream, error) {
 	// we can't use writeFrame here because we're holding the stream mutex
 	// we get conncurrency by releasing the lock after the channel send
 	// but before we wait for an error
-	req := getWriteReq()
-	req.f = f
-	s.writeFrames <- req
+	err := s.writeFrame(f, zeroTime)
 	s.newStreamMutex.Unlock()
-	var err error
-	select {
-	case err = <-req.err:
-	case <-s.dead:
-		err = sessionClosed
-	}
-	req.release()
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +176,7 @@ func (s *session) GoAway(errCode ErrorCode, debug []byte, dl time.Time) (err err
 	if err := f.Pack(remoteId, frame.ErrorCode(errCode), debug); err != nil {
 		return fromFrameError(err)
 	}
-	if err := s.writeFrame(f, dl); err != nil {
+	if err := s.writeFrameSync(f, dl); err != nil {
 		return err
 	}
 	return nil
@@ -245,16 +236,22 @@ func (s *session) removeStream(id frame.StreamId) {
 	s.streams.Delete(id)
 }
 
-// writeFrame writes the given frame to the framer and returns the error from the write operation
-func (s *session) writeFrame(f frame.Frame, dl time.Time) (err error) {
-	req := getWriteReq()
-	req.f = f
-	req.dl = dl
+type writeReq struct {
+	f  frame.Frame
+	cb func(error)
+}
 
+// writeFrame writes the given frame to the framer and returns the error from the write operation
+func (s *session) writeFrame(f frame.Frame, dl time.Time) error {
 	var timeout <-chan time.Time
 	if !dl.IsZero() {
 		timeout = time.After(dl.Sub(time.Now()))
 	}
+	written := make(chan error)
+	var fn = func(err error) {
+		written <- err
+	}
+	var req = writeReq{f: f, cb: fn}
 	select {
 	case s.writeFrames <- req:
 	case <-s.dead:
@@ -263,24 +260,25 @@ func (s *session) writeFrame(f frame.Frame, dl time.Time) (err error) {
 		return writeTimeout
 	}
 	select {
-	case err := <-req.err:
-		req.release()
+	case err := <-written:
 		return err
-	case <-s.dead:
-		req.release()
-		return sessionClosed
 	case <-timeout:
 		return writeTimeout
+	case <-s.dead:
+		return sessionClosed
 	}
 }
 
-func (s *session) writeFrameAsync(f frame.Frame) {
-	go func() {
-		err := s.writeFrame(f, zeroTime)
-		if err != nil {
-			s.die(err)
-		}
-	}()
+// like writeFrame but it guarantees not to return until the frame has been written
+// to the underlying transport
+func (s *session) writeFrameSync(f frame.Frame, dl time.Time) error {
+	return s.writeFrame(f, dl)
+}
+
+// like writeFrame but it returns immediately
+func (s *session) writeFrameAsync(f frame.Frame) error {
+	go s.writeFrame(f, zeroTime)
+	return nil
 }
 
 // die closes the session cleanly with the given error and protocol error code
@@ -298,7 +296,7 @@ func (s *session) die(err error) error {
 	}
 
 	// try to send a GOAWAY frame
-	s.GoAway(errorCode, debug, time.Now().Add(250*time.Millisecond))
+	err = s.GoAway(errorCode, debug, time.Now().Add(250*time.Millisecond))
 
 	// yay, we're dead
 	s.dieErr = err
@@ -352,23 +350,15 @@ func (s *session) reader() {
 
 func (s *session) writer() {
 	defer s.recoverPanic("writer()")
-	type timeout interface {
-		Timeout() bool
-	}
-	type deadliner interface {
-		SetWriteDeadline(time.Time) error
-	}
 	for {
 		select {
 		case req := <-s.writeFrames:
 			err := fromFrameError(s.framer.WriteFrame(req.f))
-			select {
-			case req.err <- err:
-			case <-s.dead:
-				return
+			if req.cb != nil {
+				req.cb(err)
 			}
-			if e, ok := err.(timeout); ok && !e.Timeout() {
-				// any non-timeout error (i.e. write deadline) kills the session
+			if err != nil {
+				// any write error kills the session
 				s.die(err)
 			}
 		case <-s.dead:
