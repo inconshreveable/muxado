@@ -26,11 +26,11 @@ func (f *GoAway) readFrom(rd io.Reader) error {
 		return frameSizeError(f.length, "GOAWAY")
 	}
 	if _, err := io.ReadFull(rd, f.body()[:goAwayFrameLength]); err != nil {
-		return transportError(err)
+		return err
 	}
 	f.debug = make([]byte, f.length-goAwayFrameLength)
 	if _, err := io.ReadFull(rd, f.debug); err != nil {
-		return transportError(err)
+		return err
 	}
 	if f.StreamId() != 0 {
 		return protoError("GOAWAY stream id must be zero, not: %d", f.StreamId())
@@ -43,7 +43,7 @@ func (f *GoAway) writeTo(wr io.Writer) (err error) {
 		return
 	}
 	if _, err = wr.Write(f.debug); err != nil {
-		return transportError(err)
+		return err
 	}
 	return
 }

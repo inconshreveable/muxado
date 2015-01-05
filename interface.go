@@ -3,11 +3,7 @@ package muxado
 import (
 	"net"
 	"time"
-
-	"github.com/inconshreveable/muxado/frame"
 )
-
-type StreamId frame.StreamId
 
 // Stream is a full duplex stream-oriented connection that is multiplexed over
 // a Session. Stream implements the net.Conn inteface.
@@ -42,7 +38,7 @@ type Stream interface {
 	SetWriteDeadline(time.Time) error
 
 	// Id returns the stream's unique identifier.
-	Id() StreamId
+	Id() uint32
 
 	// Session returns the session object this stream is running on.
 	Session() Session
@@ -90,5 +86,5 @@ type Session interface {
 
 	// Wait blocks until the session has shutdown and returns an error
 	// explaining the session termination.
-	Wait() (error, ErrorCode, []byte)
+	Wait() (error, error, []byte)
 }

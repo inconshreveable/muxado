@@ -4,75 +4,65 @@ import "errors"
 
 import "github.com/inconshreveable/muxado/frame"
 
-// ErrorCode is a 32-bit integer indicating an error condition on a stream or session
+// ErrorCode is a 32-bit integer indicating the type of an error condition
 type ErrorCode uint32
 
 const (
-	ErrorNone          ErrorCode = 0x0
-	ErrorProtocol      ErrorCode = 0x1
-	ErrorInternal      ErrorCode = 0x2
-	ErrorFlowControl   ErrorCode = 0x3
-	ErrorStreamClosed  ErrorCode = 0x4
-	ErrorStreamRefused ErrorCode = 0x5
-	ErrorCancel        ErrorCode = 0x6
-	ErrorFrameSize     ErrorCode = 0x7
-	ErrorTransport     ErrorCode = 0x8
-	ErrorAcceptQueue   ErrorCode = 0x9
-	ErrorCalm          ErrorCode = 0xA
-	ErrorUnspecified   ErrorCode = 0xF
-)
+	NoError ErrorCode = iota
+	ProtocolError
+	InternalError
+	FlowControlError
+	StreamClosed
+	StreamRefused
+	StreamCancelled
+	StreamReset
+	FrameSizeError
+	AcceptQueueFull
+	EnhanceYourCalm
+	RemoteGoneAway
+	StreamsExhausted
+	WriteTimeout
+	SessionClosed
 
-type (
-	errRemoteGoneAway      error
-	errFrameSize           error
-	errTransport           error
-	errProtocol            error
-	errInternal            error
-	errStreamReset         error
-	errStreamClosed        error
-	errSessionClosed       error
-	errWriteTimeout        error
-	errStreamsExhausted    error
-	errFlowControlViolated error
+	ErrorUnknown ErrorCode = 0xFF
 )
 
 var (
-	remoteGoneAway      = errRemoteGoneAway(errors.New("remote gone away"))
-	streamsExhausted    = errStreamsExhausted(errors.New("streams exhuastated"))
-	streamClosed        = errStreamClosed(errors.New("stream closed"))
-	writeTimeout        = errWriteTimeout(errors.New("write timed out"))
-	flowControlViolated = errFlowControlViolated(errors.New("flow control violated"))
-	sessionClosed       = errSessionClosed(errors.New("session closed"))
+	remoteGoneAway      = newErr(StreamClosed, errors.New("remote gone away"))
+	streamsExhausted    = newErr(StreamsExhausted, errors.New("streams exhuastated"))
+	streamClosed        = newErr(StreamClosed, errors.New("stream closed"))
+	writeTimeout        = newErr(WriteTimeout, errors.New("write timed out"))
+	flowControlViolated = newErr(FlowControlError, errors.New("flow control violated"))
+	sessionClosed       = newErr(SessionClosed, errors.New("session closed"))
 )
 
 func fromFrameError(err error) error {
 	if e, ok := err.(*frame.Error); ok {
 		switch e.Type() {
 		case frame.ErrorFrameSize:
-			return errFrameSize(e.Err())
-		case frame.ErrorTransport:
-			return errTransport(e.Err())
-		case frame.ErrorProtocol:
-			return errProtocol(e.Err())
-		case frame.ErrorProtocolStream:
-			// XXX
-			return errProtocol(e.Err())
+			return &muxadoError{FrameSizeError, err}
+		case frame.ErrorProtocol, frame.ErrorProtocolStream:
+			return &muxadoError{ProtocolError, err}
 		}
 	}
 	return err
 }
 
-func codeForError(err error) ErrorCode {
-	switch err.(type) {
-	case errFrameSize:
-		return ErrorFrameSize
-	case errProtocol:
-		return ErrorProtocol
-	case errTransport:
-		return ErrorTransport
-	case errInternal:
-		return ErrorInternal
-	default:
-		return ErrorInternal
+type muxadoError struct {
+	ErrorCode
+	error
+}
+
+func newErr(code ErrorCode, err error) error {
+	return &muxadoError{code, err}
+}
+
+func GetError(err error) (ErrorCode, error) {
+	if err == nil {
+		return NoError, nil
 	}
+	if e, ok := err.(*muxadoError); ok {
+		return e.ErrorCode, e.error
+	}
+	return ErrorUnknown, err
 }

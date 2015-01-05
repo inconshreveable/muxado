@@ -8,7 +8,6 @@ type ErrorType int
 
 const (
 	ErrorFrameSize ErrorType = iota
-	ErrorTransport
 	ErrorProtocol
 	ErrorProtocolStream
 )
@@ -36,11 +35,4 @@ func protoError(fmtstr string, args ...interface{}) error {
 
 func protoStreamError(fmtstr string, args ...interface{}) error {
 	return &Error{ErrorProtocolStream, fmt.Errorf(fmtstr, args...)}
-}
-
-func transportError(err error) error {
-	if err == nil {
-		return err
-	}
-	return &Error{ErrorTransport, err}
 }

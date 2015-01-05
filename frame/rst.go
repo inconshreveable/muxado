@@ -20,7 +20,7 @@ func (f *Rst) readFrom(rd io.Reader) (err error) {
 		return frameSizeError(f.length, "RST")
 	}
 	if _, err = io.ReadFull(rd, f.body()[:rstFrameLength]); err != nil {
-		return transportError(err)
+		return err
 	}
 	if f.StreamId() == 0 {
 		return protoError("RST stream id must not be zero")

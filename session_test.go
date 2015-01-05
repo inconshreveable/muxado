@@ -27,7 +27,7 @@ func (s *fakeStream) SetDeadline(time.Time) error            { return nil }
 func (s *fakeStream) SetReadDeadline(time.Time) error        { return nil }
 func (s *fakeStream) SetWriteDeadline(time.Time) error       { return nil }
 func (s *fakeStream) CloseWrite() error                      { return nil }
-func (s *fakeStream) Id() StreamId                           { return StreamId(s.streamId) }
+func (s *fakeStream) Id() uint32                             { return uint32(s.streamId) }
 func (s *fakeStream) Session() Session                       { return s.sess }
 func (s *fakeStream) RemoteAddr() net.Addr                   { return nil }
 func (s *fakeStream) LocalAddr() net.Addr                    { return nil }
@@ -62,7 +62,6 @@ func newFakeConnPair() (local *fakeConn, remote *fakeConn) {
 func TestWrongClientParity(t *testing.T) {
 	t.Parallel()
 	local, remote := newFakeConnPair()
-	fmt.Println(local.in, remote.out, remote.in, local.out)
 	// don't need the remote output
 	remote.Discard()
 
@@ -78,10 +77,10 @@ func TestWrongClientParity(t *testing.T) {
 	fr.WriteFrame(f)
 
 	// wait for failure
-	err, code, _ := s.Wait()
+	err, _, _ := s.Wait()
 
-	if code != ErrorProtocol {
-		t.Errorf("Session not terminated with protocol error. Got %d, expected %d. Session error: %v", code, ErrorProtocol, err)
+	if code, _ := GetError(err); code != ProtocolError {
+		t.Errorf("Session not terminated with protocol error. Got %d, expected %d. Session error: %v", code, ProtocolError, err)
 	}
 
 	if !local.closed {
@@ -109,10 +108,10 @@ func TestWrongServerParity(t *testing.T) {
 	fr.WriteFrame(f)
 
 	// wait for failure
-	err, code, _ := s.Wait()
+	err, _, _ := s.Wait()
 
-	if code != ErrorProtocol {
-		t.Errorf("Session not terminated with protocol error. Got %d, expected %d. Session error: %v", code, ErrorProtocol, err)
+	if code, _ := GetError(err); code != ProtocolError {
+		t.Errorf("Session not terminated with protocol error. Got %d, expected %d. Session error: %v", code, ProtocolError, err)
 	}
 
 	if !local.closed {
@@ -151,7 +150,7 @@ func TestAcceptStream(t *testing.T) {
 			return
 		}
 
-		if str.Id() != StreamId(300) {
+		if str.Id() != 300 {
 			t.Errorf("Stream has wrong id. Expected %d, got %d", str.Id(), 300)
 		}
 	}()
@@ -191,9 +190,9 @@ func TestSynLowId(t *testing.T) {
 	// send the frame into the session
 	fr.WriteFrame(f)
 
-	err, code, _ := s.Wait()
-	if code != ErrorProtocol {
-		t.Errorf("Session not terminated with protocol error, got %d expected %d. Error: %v", code, ErrorProtocol, err)
+	err, _, _ := s.Wait()
+	if code, _ := GetError(err); code != ProtocolError {
+		t.Errorf("Session not terminated with protocol error, got %d expected %d. Error: %v", code, ProtocolError, err)
 	}
 }
 
@@ -283,8 +282,12 @@ func TestWriteAfterClose(t *testing.T) {
 	stream.Close()
 	closed <- 1
 
-	err, code, debug := sLocal.Wait()
-	if err != nil || code != ErrorNone {
-		t.Fatalf("Failed to accept second connection, session closed with localErr: %v, remoteErr: %v (code 0x%x)!", err, string(debug), code)
+	err, remoteErr, debug := sLocal.Wait()
+	if err != nil {
+		t.Fatalf("session closed with error: %v, expected nil", err)
+	}
+	remoteCode, _ := GetError(remoteErr)
+	if remoteCode != NoError {
+		t.Fatalf("remote session closed with error code: %v, expected NoError (debug: %s)", remoteCode, debug)
 	}
 }

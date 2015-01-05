@@ -43,7 +43,7 @@ func (f *Data) writeTo(wr io.Writer) (err error) {
 		return err
 	}
 	if _, err = wr.Write(f.toWrite); err != nil {
-		return transportError(err)
+		return err
 	}
 	return
 }

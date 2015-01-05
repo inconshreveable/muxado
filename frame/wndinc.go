@@ -23,7 +23,7 @@ func (f *WndInc) readFrom(rd io.Reader) error {
 		return frameSizeError(f.length, "WNDINC")
 	}
 	if _, err := io.ReadFull(rd, f.body()[:wndIncFrameLength]); err != nil {
-		return transportError(err)
+		return err
 	}
 	if f.StreamId() == 0 {
 		return protoError("WNDINC stream id must not be zero, got: %d", f.StreamId())

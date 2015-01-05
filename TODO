@@ -1,11 +1,9 @@
 Performance ideas:
     use buffered io?
-    copy data for write and issue one write call if data size is small (copy co
     move high throughput connections to their own connections
 
 improve the formatting of the docs to look nice for godoc
 better docs
-Make all errors support Temporary() API so applications can better decide what to do
 Handle case of running out of stream ids + test
 Short read should cause an error + test
 Decrement() in outBuffer needs to have deadline support
@@ -30,4 +28,3 @@ Write frame/goaway tests
 - Eliminate unlikely race on s.remoteDebug between handleFrame() and die()
 - Should writeFrame calls for rst/wndinc set the write deadline?
 - don't send reset if the stream is fully closed
-- include muxado pun somewhere in the docs

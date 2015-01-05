@@ -105,8 +105,8 @@ func (s *stream) CloseWrite() error {
 	return err
 }
 
-func (s *stream) Id() StreamId {
-	return StreamId(s.id)
+func (s *stream) Id() uint32 {
+	return uint32(s.id)
 }
 
 func (s *stream) Session() Session {
@@ -130,17 +130,17 @@ func (s *stream) handleStreamData(f *frame.Data) error {
 		// write the data into the buffer
 		if _, err := s.inBuffer.ReadFrom(f.Reader()); err != nil {
 			if err == buffer.FullError {
-				s.resetWith(ErrorFlowControl, flowControlViolated)
+				s.resetWith(FlowControlError, flowControlViolated)
 			} else if err == closeError {
 				// We're trying to emulate net.Conn's Close() behavior where we close our side of the connection,
 				// and if we get any more frames from the other side, we RST it.
-				s.resetWith(ErrorStreamClosed, streamClosed)
+				s.resetWith(StreamClosed, streamClosed)
 			} else if err == buffer.AlreadyClosed {
 				// there was already an error set
-				s.resetWith(ErrorStreamClosed, streamClosed)
+				s.resetWith(StreamClosed, streamClosed)
 			} else {
 				// the transport returned some sort of IO error
-				return errTransport(err)
+				return err
 			}
 			return nil
 		}
@@ -153,7 +153,7 @@ func (s *stream) handleStreamData(f *frame.Data) error {
 }
 
 func (s *stream) handleStreamRst(f *frame.Rst) error {
-	s.closeWith(errStreamReset(fmt.Errorf("Stream reset by peer with error: %s", f.ErrorCode())))
+	s.closeWith(newErr(StreamReset, fmt.Errorf("Stream reset by peer with error: %s", f.ErrorCode())))
 	return nil
 }
 
@@ -198,7 +198,7 @@ func (s *stream) resetWith(errorCode ErrorCode, resetErr error) {
 	// make the reset frame
 	rst := frame.NewRst()
 	if err := rst.Pack(s.id, frame.ErrorCode(errorCode)); err != nil {
-		s.session.die(errInternal(fmt.Errorf("failed to pack RST frame: %v", err)))
+		s.session.die(newErr(InternalError, fmt.Errorf("failed to pack RST frame: %v", err)))
 		return
 	}
 
@@ -238,7 +238,7 @@ func (s *stream) write(buf []byte, fin bool) (n int, err error) {
 		// make the frame
 		data := frame.NewData()
 		if err = data.Pack(s.id, buf[start:end], finBit, false); err != nil {
-			err = errInternal(fmt.Errorf("failed to pack DATA frame: %v", err))
+			err = newErr(InternalError, fmt.Errorf("failed to pack DATA frame: %v", err))
 			s.writer.Unlock()
 			return
 		}
@@ -272,7 +272,7 @@ func (s *stream) sendWindowUpdate(inc uint32) {
 	// send a window update
 	wndinc := frame.NewWndInc()
 	if err := wndinc.Pack(s.id, inc); err != nil {
-		s.session.die(errInternal(fmt.Errorf("failed to pack WNDINC frame: %v", err)))
+		s.session.die(newErr(InternalError, fmt.Errorf("failed to pack WNDINC frame: %v", err)))
 		return
 	}
 	// XXX: write this async? We can only write one at

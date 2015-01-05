@@ -1,6 +1,7 @@
 package muxado
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -61,8 +62,18 @@ type session struct {
 	dieErr error         // the first error that caused session termination
 
 	// debug information received from the remote end via GOAWAY frame
-	remoteErrorCode ErrorCode
-	remoteDebug     []byte
+	remoteError error
+	remoteDebug []byte
+}
+
+// Client returns a new muxado client-side connection using trans as the transport.
+func Client(trans io.ReadWriteCloser) Session {
+	return newSession(trans, newStream, true)
+}
+
+// Server returns a muxado server session using trans as the transport.
+func Server(trans io.ReadWriteCloser) Session {
+	return newSession(trans, newStream, false)
 }
 
 type rdwr struct {
@@ -82,7 +93,6 @@ func newSession(transport io.ReadWriteCloser, newStream streamFactory, isClient 
 		defaultWindowSize: defaultWindowSize,
 		newStream:         newStream,
 		writeFrames:       make(chan writeReq, 64),
-		remoteErrorCode:   ErrorUnspecified,
 		dead:              make(chan struct{}),
 	}
 	if isClient {
@@ -132,7 +142,7 @@ func (s *session) OpenStream() (Stream, error) {
 	f := frame.NewData()
 	if err := f.Pack(nextId, []byte{}, false, true); err != nil {
 		s.newStreamMutex.Unlock()
-		return nil, errInternal(err)
+		return nil, newErr(InternalError, err)
 	}
 
 	// we can't use writeFrame here because we're holding the stream mutex
@@ -220,9 +230,9 @@ func (s *session) Addr() net.Addr {
 	return s.LocalAddr()
 }
 
-func (s *session) Wait() (error, ErrorCode, []byte) {
+func (s *session) Wait() (error, error, []byte) {
 	<-s.dead
-	return s.dieErr, s.remoteErrorCode, s.remoteDebug
+	return s.dieErr, s.remoteError, s.remoteDebug
 }
 
 ////////////////////////////////
@@ -288,15 +298,15 @@ func (s *session) die(err error) error {
 		return sessionClosed
 	}
 
-	errorCode := ErrorNone
-	debug := []byte{}
+	errorCode := NoError
+	debug := []byte("no error")
 	if err != nil {
-		errorCode = codeForError(err)
+		errorCode, _ = GetError(err)
 		debug = []byte(err.Error())
 	}
 
 	// try to send a GOAWAY frame
-	err = s.GoAway(errorCode, debug, time.Now().Add(250*time.Millisecond))
+	_ = s.GoAway(errorCode, debug, time.Now().Add(250*time.Millisecond))
 
 	// yay, we're dead
 	s.dieErr = err
@@ -383,15 +393,15 @@ func (s *session) handleFrame(rf frame.Frame) error {
 			n, err := io.Copy(ioutil.Discard, f.Reader())
 			switch {
 			case err != nil:
-				return errTransport(err)
+				return err
 			case uint32(n) < f.Length():
 				return io.ErrUnexpectedEOF
 			}
 
 			// DATA frames on closed connections are just stream-level errors
 			fRst := frame.NewRst()
-			if err := fRst.Pack(f.StreamId(), frame.ErrorCode(ErrorStreamClosed)); err != nil {
-				return errInternal(fmt.Errorf("failed to pack data on closed stream RST: %v", err))
+			if err := fRst.Pack(f.StreamId(), frame.ErrorCode(StreamClosed)); err != nil {
+				return newErr(InternalError, fmt.Errorf("failed to pack data on closed stream RST: %v", err))
 			}
 			s.writeFrameAsync(fRst)
 			return nil
@@ -413,7 +423,7 @@ func (s *session) handleFrame(rf frame.Frame) error {
 		atomic.StoreUint32(&s.remote.goneAway, 1)
 		// XXX: this races with shutdown
 		s.remoteDebug = f.Debug()
-		s.remoteErrorCode = ErrorCode(f.ErrorCode())
+		s.remoteError = &muxadoError{ErrorCode(f.ErrorCode()), errors.New(string(f.Debug()))}
 		lastId := f.LastStreamId()
 		s.streams.Each(func(id frame.StreamId, str streamPrivate) {
 			// close all streams that we opened above the last handled id
@@ -433,8 +443,8 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 	// if we're going away, refuse new streams
 	if atomic.LoadUint32(&s.local.goneAway) == 1 {
 		rstF := frame.NewRst()
-		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(ErrorStreamRefused)); err != nil {
-			return errInternal(fmt.Errorf("failed to pack stream refused RST: %v", err))
+		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(StreamRefused)); err != nil {
+			return newErr(InternalError, fmt.Errorf("failed to pack stream refused RST: %v", err))
 		}
 		s.writeFrameAsync(rstF)
 		return
@@ -442,12 +452,12 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 	lastRemoteId := frame.StreamId(atomic.LoadUint32(&s.remote.lastId))
 	if f.StreamId() < lastRemoteId {
 		err := fmt.Errorf("initiated stream id 0x%x is less than last remote id: 0x%x", f.StreamId(), lastRemoteId)
-		return errProtocol(err)
+		return newErr(ProtocolError, err)
 	}
 
 	if s.isLocal(f.StreamId()) {
 		err := fmt.Errorf("initiated stream id has wrong parity for remote endpoint: 0x%x", f.StreamId())
-		return errProtocol(err)
+		return newErr(ProtocolError, err)
 	}
 
 	// update last remote id
@@ -465,8 +475,8 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 	case <-time.After(5 * time.Millisecond):
 		// accept queue is full
 		rstF := frame.NewRst()
-		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(ErrorAcceptQueue)); err != nil {
-			return errInternal(fmt.Errorf("failed to pack accept overflow RST: %v", err))
+		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(AcceptQueueFull)); err != nil {
+			return newErr(InternalError, fmt.Errorf("failed to pack accept overflow RST: %v", err))
 		}
 		s.writeFrameAsync(rstF)
 	}
@@ -477,7 +487,7 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 
 func (s *session) recoverPanic(prefix string) {
 	if r := recover(); r != nil {
-		s.die(errInternal(fmt.Errorf("%s panic: %v", prefix, r)))
+		s.die(newErr(InternalError, fmt.Errorf("%s panic: %v", prefix, r)))
 	}
 }
 
@@ -490,7 +500,7 @@ func (s *session) getStream(id frame.StreamId) (str streamPrivate) {
 		lastId = &s.remote.lastId
 	}
 	if uint32(id) > atomic.LoadUint32(lastId) {
-		s.die(errProtocol(fmt.Errorf("%d is an invalid, unassigned stream id", id)))
+		s.die(newErr(ProtocolError, fmt.Errorf("%d is an invalid, unassigned stream id", id)))
 	}
 
 	// find the stream in the stream map

@@ -110,7 +110,7 @@ func (c *common) Flags() Flags {
 func (c *common) readFrom(r io.Reader) error {
 	b := c.b[:headerSize]
 	if _, err := io.ReadFull(r, b); err != nil {
-		return transportError(err)
+		return err
 	}
 	c.length = (uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2]))
 	c.ftype = Type(b[3] >> 4)
@@ -121,7 +121,7 @@ func (c *common) readFrom(r io.Reader) error {
 
 func (c *common) writeTo(w io.Writer, fixedSize int) error {
 	_, err := w.Write(c.b[:headerSize+fixedSize])
-	return transportError(err)
+	return err
 }
 
 func (c *common) pack(ftype Type, length int, streamId StreamId, flags Flags) error {
