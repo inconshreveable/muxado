@@ -73,7 +73,7 @@ func TestWrongClientParity(t *testing.T) {
 	f.Pack(300, []byte{}, false, true)
 
 	// send the frame into the session
-	fr := frame.NewFramer(remote)
+	fr := frame.NewFramer(remote, remote)
 	fr.WriteFrame(f)
 
 	// wait for failure
@@ -104,7 +104,7 @@ func TestWrongServerParity(t *testing.T) {
 	f.Pack(301, []byte{}, false, true)
 
 	// send the frame into the session
-	fr := frame.NewFramer(remote)
+	fr := frame.NewFramer(remote, remote)
 	fr.WriteFrame(f)
 
 	// wait for failure
@@ -135,7 +135,7 @@ func TestAcceptStream(t *testing.T) {
 	f.Pack(300, []byte{}, false, true)
 
 	// send the frame into the session
-	fr := frame.NewFramer(remote)
+	fr := frame.NewFramer(remote, remote)
 	fr.WriteFrame(f)
 
 	done := make(chan int)
@@ -178,7 +178,7 @@ func TestSynLowId(t *testing.T) {
 	f.Pack(302, []byte{}, false, true)
 
 	// send the frame into the session
-	fr := frame.NewFramer(remote)
+	fr := frame.NewFramer(remote, remote)
 	fr.WriteFrame(f)
 
 	// accept it
@@ -263,11 +263,11 @@ func TestWriteAfterClose(t *testing.T) {
 		}
 
 		// give the remote end some time to send us an RST
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 
 		// this write should fail
 		if _, err = stream.Write([]byte("test!")); err == nil {
-			fmt.Println("WROTE FRAME FAILED")
+			fmt.Println("WROTE FRAME WITHOUT ERROR")
 			t.Errorf("expected error, but not did not receive one")
 			return
 		}

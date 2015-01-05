@@ -24,10 +24,9 @@ type Framer interface {
 	ReadFrame() (Frame, error)
 }
 
-// BasicTransport can serialize/deserialize frames on an underlying
-// nefr.Conn to implement the muxado protocol.
 type framer struct {
-	io.ReadWriter
+	io.Reader
+	io.Writer
 	common
 
 	// frames
@@ -38,11 +37,11 @@ type framer struct {
 }
 
 func (fr *framer) WriteFrame(f Frame) error {
-	return f.writeTo(fr.ReadWriter)
+	return f.writeTo(fr.Writer)
 }
 
 func (fr *framer) ReadFrame() (f Frame, err error) {
-	if err := fr.common.readFrom(fr.ReadWriter); err != nil {
+	if err := fr.common.readFrom(fr.Reader); err != nil {
 		return nil, err
 	}
 	switch fr.common.ftype {
@@ -61,9 +60,10 @@ func (fr *framer) ReadFrame() (f Frame, err error) {
 	return f, f.readFrom(fr)
 }
 
-func NewFramer(rw io.ReadWriter) Framer {
+func NewFramer(r io.Reader, w io.Writer) Framer {
 	fr := &framer{
-		ReadWriter: rw,
+		Reader: r,
+		Writer: w,
 	}
 	fr.Rst.common = &fr.common
 	fr.Data.common = &fr.common
