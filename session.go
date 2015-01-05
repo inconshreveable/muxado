@@ -76,18 +76,10 @@ func Server(trans io.ReadWriteCloser) Session {
 	return newSession(trans, newStream, false)
 }
 
-type rdwr struct {
-	rd io.Reader
-	wr io.Writer
-}
-
-func (rw *rdwr) Read(p []byte) (int, error)  { return rw.rd.Read(p) }
-func (rw *rdwr) Write(p []byte) (int, error) { return rw.wr.Write(p) }
-
 func newSession(transport io.ReadWriteCloser, newStream streamFactory, isClient bool) Session {
 	sess := &session{
 		transport:         transport,
-		framer:            frame.NewFramer(transport),
+		framer:            frame.NewFramer(transport, transport),
 		streams:           newStreamMap(),
 		accept:            make(chan streamPrivate, defaultAcceptQueueDepth),
 		defaultWindowSize: defaultWindowSize,
