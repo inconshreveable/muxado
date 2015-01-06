@@ -9,7 +9,22 @@ import (
 	"net"
 	"sync"
 	"testing"
+
+	"github.com/hashicorp/yamux"
 )
+
+type muxSession interface {
+	OpenStream() (muxStream, error)
+	AcceptStream() (muxStream, error)
+	Wait() (error, error, []byte)
+}
+
+type muxStream interface {
+	Read([]byte) (int, error)
+	Write([]byte) (int, error)
+	//CloseWrite() error
+	Close() error
+}
 
 func BenchmarkPayload1BStreams1(b *testing.B) {
 	testCase(b, 1, 1)
@@ -73,19 +88,16 @@ func BenchmarkPayload64MBStreams256(b *testing.B) {
 
 func testCase(b *testing.B, payloadSize int64, concurrency int) {
 	done := make(chan int)
-	c, s := tcpTransport()
-	go client(b, c, payloadSize)
-	go server(b, s, payloadSize, concurrency, done)
+	c, s := memTransport()
+	sessFactory := newMuxadoAdaptor
+	//sessFactory := newYamuxAdaptor
+	go client(b, sessFactory(c, false), payloadSize)
+	go server(b, sessFactory(s, true), payloadSize, concurrency, done)
 	<-done
 }
 
-func server(b *testing.B, sess Session, payloadSize int64, concurrency int, done chan int) {
+func server(b *testing.B, sess muxSession, payloadSize int64, concurrency int, done chan int) {
 	go wait(b, sess, "server")
-
-	go func() {
-		err, remoteErr, _ := sess.Wait()
-		fmt.Printf("session died with err %v, remote: %v\n", err, remoteErr)
-	}()
 
 	payloads := make([]*alot, concurrency)
 	for i := 0; i < concurrency; i++ {
@@ -108,8 +120,9 @@ func server(b *testing.B, sess Session, payloadSize int64, concurrency int, done
 					panic(err)
 				}
 				go func() {
-					io.Copy(ioutil.Discard, str)
+					io.CopyN(ioutil.Discard, str, payloadSize)
 					wg.Done()
+					//str.Close()
 				}()
 				n, err := io.Copy(str, p)
 				if n != payloadSize {
@@ -118,7 +131,6 @@ func server(b *testing.B, sess Session, payloadSize int64, concurrency int, done
 				if err != nil {
 					panic(err)
 				}
-				str.CloseWrite()
 			}(payloads[c])
 		}
 		close(start)
@@ -127,7 +139,7 @@ func server(b *testing.B, sess Session, payloadSize int64, concurrency int, done
 	close(done)
 }
 
-func client(b *testing.B, sess Session, expectedSize int64) {
+func client(b *testing.B, sess muxSession, expectedSize int64) {
 	go wait(b, sess, "client")
 
 	for {
@@ -136,7 +148,7 @@ func client(b *testing.B, sess Session, expectedSize int64) {
 			panic(err)
 		}
 
-		go func(s Stream) {
+		go func(s muxStream) {
 			n, err := io.Copy(s, s)
 			if err != nil {
 				panic(err)
@@ -149,7 +161,7 @@ func client(b *testing.B, sess Session, expectedSize int64) {
 	}
 }
 
-func wait(b *testing.B, sess Session, name string) {
+func wait(b *testing.B, sess muxSession, name string) {
 	localErr, remoteErr, _ := sess.Wait()
 	localCode, _ := GetError(localErr)
 	remoteCode, _ := GetError(remoteErr)
@@ -184,24 +196,24 @@ func (a *alot) Reset() {
 	a.count = 0
 }
 
-func tcpTransport() (Session, Session) {
+func tcpTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {
 	l, port := listener()
 	defer l.Close()
-	c := make(chan Session)
-	s := make(chan Session)
+	c := make(chan io.ReadWriteCloser)
+	s := make(chan io.ReadWriteCloser)
 	go func() {
 		conn, err := l.Accept()
 		if err != nil {
 			panic(err)
 		}
-		s <- Server(conn)
+		s <- conn
 	}()
 	go func() {
 		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
 			panic(err)
 		}
-		c <- Client(conn)
+		c <- conn
 	}()
 	return <-c, <-s
 }
@@ -217,12 +229,12 @@ func (dp *duplexPipe) Close() error {
 	return nil
 }
 
-func memTransport() (Session, Session) {
+func memTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {
 	rd1, wr1 := io.Pipe()
 	rd2, wr2 := io.Pipe()
 	client := &duplexPipe{rd1, wr2}
 	server := &duplexPipe{rd2, wr1}
-	return Client(client), Server(server)
+	return client, server
 }
 
 func listener() (net.Listener, int) {
@@ -232,4 +244,54 @@ func listener() (net.Listener, int) {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	return l, port
+}
+
+type muxadoAdaptor struct {
+	Session
+}
+
+func (a *muxadoAdaptor) OpenStream() (muxStream, error) {
+	return a.Session.OpenStream()
+}
+
+func (a *muxadoAdaptor) AcceptStream() (muxStream, error) {
+	return a.Session.AcceptStream()
+}
+
+func newMuxadoAdaptor(rwc io.ReadWriteCloser, isServer bool) muxSession {
+	newSess := Client
+	if isServer {
+		newSess = Server
+	}
+	return &muxadoAdaptor{newSess(rwc)}
+}
+
+type yamuxAdaptor struct {
+	*yamux.Session
+}
+
+func (a *yamuxAdaptor) OpenStream() (muxStream, error) {
+	str, err := a.Session.OpenStream()
+	return str, err
+}
+
+func (a *yamuxAdaptor) AcceptStream() (muxStream, error) {
+	str, err := a.Session.AcceptStream()
+	return str, err
+}
+
+func (a *yamuxAdaptor) Wait() (error, error, []byte) {
+	select {}
+}
+
+func newYamuxAdaptor(rwc io.ReadWriteCloser, isServer bool) muxSession {
+	newSess := yamux.Client
+	if isServer {
+		newSess = yamux.Server
+	}
+	sess, err := newSess(rwc, yamux.DefaultConfig())
+	if err != nil {
+		panic(err)
+	}
+	return &yamuxAdaptor{sess}
 }
