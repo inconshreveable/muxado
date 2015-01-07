@@ -51,7 +51,6 @@ func (b *inboundBuffer) ReadFrom(rd io.Reader) (n int, err error) {
 		b.err = bufferFull
 	}
 
-BROADCAST:
 	b.cond.Broadcast()
 DONE:
 	b.mu.Unlock()
