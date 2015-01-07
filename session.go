@@ -234,8 +234,12 @@ func poolGet() interface{} {
 		return make(chan error)
 	}
 }
+
 func poolPut(x interface{}) {
-	pool <- x.(chan error)
+	select {
+	case pool <- x.(chan error):
+	default:
+	}
 }
 
 // writeFrame writes the given frame to the framer and returns the error from the write operation
