@@ -1,30 +1,28 @@
-Performance ideas:
-    use buffered io?
-    move high throughput connections to their own connections
+PERF:
+Use buffered io? Optionally? When would you flush?
+Move high throughput connections to their own connections
+Use a ring buffer?
+Mitigate allocation of windowupdates (pool?)
 
-improve the formatting of the docs to look nice for godoc
-better docs
-Handle case of running out of stream ids + test
-Short read should cause an error + test
-Decrement() in outBuffer needs to have deadline support
+DOCS:
+Write a more extensive example
+Document the muxado wire protocol
 
-heartbeat test
-Finish writing buffer tests
-Write stress test
-Write multi-frame write test
+TESTING:
+tests for heartbeat
+tests for typedstream
+test for stream exhaustion
+test for short read of data frame
+tests for window manager
+tests for buffer
+re-enable stream tests
+re-enable frame tests
 More session tests
 More stream tests
-Write frame/transport tests - verify read correct type, verify unknown type causes error, verify ioerror is propogated
-Write frame/syn tests
-Write frame/goaway tests
+Write frame/framer tests - verify read correct type, verify unknown type causes error, verify proper errors
 
 ### Low priority:
-- Add the ability to differentiate stream errors which allow you to safely retry
-- Decide what to do if the application isn't handling its accepted streams fast enough. Refuse stream? Wait and block reading more frames?
-- Figure out whether to die with/without lock - in GoAway/OpenStream
-- Add priority APIs to stream
-- Add priority extension
-- Add Reset() stream API
-- Eliminate unlikely race on s.remoteDebug between handleFrame() and die()
-- Should writeFrame calls for rst/wndinc set the write deadline?
-- don't send reset if the stream is fully closed
+window_manager needs to support a deadline
+add Reset() stream API?
+eliminate unlikely race on s.remoteDebug between handleFrame() and die()
+don't send reset if the stream is fully closed
