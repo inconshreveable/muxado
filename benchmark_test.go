@@ -88,8 +88,8 @@ func BenchmarkPayload64MBStreams256(b *testing.B) {
 func testCase(b *testing.B, payloadSize int64, concurrency int) {
 	done := make(chan int)
 	c, s := memTransport()
-	//sessFactory := newMuxadoAdaptor
-	sessFactory := newYamuxAdaptor
+	sessFactory := newMuxadoAdaptor
+	//sessFactory := newYamuxAdaptor
 	go client(b, sessFactory(c, false), payloadSize)
 	go server(b, sessFactory(s, true), payloadSize, concurrency, done)
 	<-done
@@ -160,7 +160,7 @@ func wait(b *testing.B, sess muxSession, name string) {
 	localErr, remoteErr, _ := sess.Wait()
 	localCode, _ := GetError(localErr)
 	remoteCode, _ := GetError(remoteErr)
-	fmt.Printf("'%s' session died with local err %v (code 0x%x), and remote err %v (code 0x%x)\n", localErr, localCode, remoteErr, remoteCode)
+	fmt.Printf("'%s' session died with local err %v (code 0x%x), and remote err %v (code 0x%x)\n", name, localErr, localCode, remoteErr, remoteCode)
 	if localCode != NoError || remoteCode != NoError {
 		b.Errorf("bad session shutdown")
 	}
@@ -168,8 +168,7 @@ func wait(b *testing.B, sess muxSession, name string) {
 
 var sourceBuf = bytes.Repeat([]byte("0123456789"), 12800)
 
-type alot struct {
-}
+type alot struct{}
 
 func (a *alot) Read(p []byte) (int, error) {
 	copy(p, sourceBuf)

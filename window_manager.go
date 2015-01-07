@@ -11,8 +11,9 @@ type windowManager interface {
 }
 
 type condWindow struct {
-	val int
-	err error
+	val     int
+	maxSize int
+	err     error
 	sync.Cond
 	sync.Mutex
 }
@@ -25,6 +26,7 @@ func newCondWindow(initialSize int) *condWindow {
 
 func (w *condWindow) Init(initialSize int) {
 	w.val = initialSize
+	w.maxSize = initialSize
 	w.Cond.L = &w.Mutex
 }
 
@@ -60,8 +62,8 @@ func (w *condWindow) Decrement(dec int) (ret int, err error) {
 				w.val = 0
 				break
 			} else {
-				w.val -= dec
 				ret = dec
+				w.val -= dec
 				break
 			}
 		} else {

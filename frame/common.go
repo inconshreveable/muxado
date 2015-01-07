@@ -156,7 +156,7 @@ func (c *common) String() string {
 	s := fmt.Sprintf(
 		"FRAME [TYPE: %s | LENGTH: %d | STREAMID: %x | FLAGS: %d",
 		c.Type(), c.Length(), c.StreamId(), c.Flags())
-	if c.Type() != TypeData {
+	if c.Type() != TypeData && c.Type() != TypeGoAway {
 		s += fmt.Sprintf(" | BODY: %x", c.body()[:c.Length()])
 	}
 	s += "]"

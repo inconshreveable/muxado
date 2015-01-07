@@ -6,7 +6,6 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,7 +27,7 @@ type streamPrivate interface {
 }
 
 // factory function that creates new streams
-type streamFactory func(sess sessionPrivate, id frame.StreamId, windowSize uint32, fin bool) streamPrivate
+type streamFactory func(sess sessionPrivate, id frame.StreamId, windowSize uint32, fin bool, init bool) streamPrivate
 
 // checks the parity of a stream id (local vs remote, client vs server)
 type parityFn func(frame.StreamId) bool
@@ -44,10 +43,9 @@ type halfState struct {
 // - When closing the Session, it does not linger, all pending write operations will fail immediately.
 // - It offers no customization of settings like window size/ping time
 type session struct {
-	dieOnce        uint32     // guarantees only one die() call proceeds, first for alignment
-	local          halfState  // client state
-	remote         halfState  // server state
-	newStreamMutex sync.Mutex // synchronization creating new streams
+	dieOnce uint32    // guarantees only one die() call proceeds, first for alignment
+	local   halfState // client state
+	remote  halfState // server state
 
 	transport         io.ReadWriteCloser // multiplexing over this transport stream
 	framer            frame.Framer       // framer
@@ -99,6 +97,15 @@ func newSession(transport io.ReadWriteCloser, newStream streamFactory, isClient 
 	return sess
 }
 
+// check if a stream id is for a client stream. client streams are odd
+func (s *session) isClient(id frame.StreamId) bool {
+	return uint32(id)&1 == 1
+}
+
+func (s *session) isServer(id frame.StreamId) bool {
+	return !s.isClient(id)
+}
+
 ////////////////////////////////
 // public interface
 ////////////////////////////////
@@ -112,35 +119,17 @@ func (s *session) OpenStream() (Stream, error) {
 		return nil, remoteGoneAway
 	}
 
-	// this lock prevents the following race:
-	// goroutine1       goroutine2
-	// - inc stream id
-	//                  - inc stream id
-	//                  - send syn
-	// - send syn
-	s.newStreamMutex.Lock()
-
 	// get the next id we can use
 	nextId := frame.StreamId(atomic.AddUint32(&s.local.lastId, 2))
 	if nextId&(1<<31) > 0 {
-		s.newStreamMutex.Unlock()
 		return nil, streamsExhausted
 	}
 
 	// make the stream and add it to the stream map
-	str := s.newStream(s, nextId, s.defaultWindowSize, false)
+	str := s.newStream(s, nextId, s.defaultWindowSize, false, true)
 	s.streams.Set(nextId, str)
 
-	// pack an empty data frame with a syn flag
-	f := frame.NewData()
-	if err := f.Pack(nextId, []byte{}, false, true); err != nil {
-		s.newStreamMutex.Unlock()
-		return nil, newErr(InternalError, err)
-	}
-
-	err := s.writeFrameAsync(f)
-	s.newStreamMutex.Unlock()
-	return str, err
+	return str, nil
 }
 
 func (s *session) AcceptStream() (str Stream, err error) {
@@ -173,7 +162,7 @@ func (s *session) GoAway(errCode ErrorCode, debug []byte, dl time.Time) (err err
 	if err := f.Pack(remoteId, frame.ErrorCode(errCode), debug); err != nil {
 		return fromFrameError(err)
 	}
-	return s.writeFrameSync(f, dl)
+	return s.writeFrame(f, dl)
 }
 
 type addr struct {
@@ -231,8 +220,22 @@ func (s *session) removeStream(id frame.StreamId) {
 }
 
 type writeReq struct {
-	f  frame.Frame
-	cb func(error)
+	f   frame.Frame
+	err chan error
+}
+
+var pool = make(chan chan error, 1024)
+
+func poolGet() interface{} {
+	select {
+	case item := <-pool:
+		return item
+	default:
+		return make(chan error)
+	}
+}
+func poolPut(x interface{}) {
+	pool <- x.(chan error)
 }
 
 // writeFrame writes the given frame to the framer and returns the error from the write operation
@@ -241,11 +244,7 @@ func (s *session) writeFrame(f frame.Frame, dl time.Time) error {
 	if !dl.IsZero() {
 		timeout = time.After(dl.Sub(time.Now()))
 	}
-	written := make(chan error)
-	var fn = func(err error) {
-		written <- err
-	}
-	var req = writeReq{f: f, cb: fn}
+	var req = writeReq{f: f, err: poolGet().(chan error)}
 	select {
 	case s.writeFrames <- req:
 	case <-s.dead:
@@ -254,19 +253,14 @@ func (s *session) writeFrame(f frame.Frame, dl time.Time) error {
 		return writeTimeout
 	}
 	select {
-	case err := <-written:
+	case err := <-req.err:
+		poolPut(req.err)
 		return err
 	case <-timeout:
 		return writeTimeout
 	case <-s.dead:
 		return sessionClosed
 	}
-}
-
-// like writeFrame but it guarantees not to return until the frame has been written
-// to the underlying transport
-func (s *session) writeFrameSync(f frame.Frame, dl time.Time) error {
-	return s.writeFrame(f, dl)
 }
 
 // like writeFrame but it returns immediately, do not use with any frame/buffer that will be reused
@@ -317,6 +311,25 @@ func (s *session) die(err error) error {
 // internal methods
 ////////////////////////////////
 
+func (s *session) writer() {
+	defer s.recoverPanic("writer()")
+	for {
+		select {
+		case req := <-s.writeFrames:
+			err := fromFrameError(s.framer.WriteFrame(req.f))
+			if req.err != nil {
+				req.err <- err
+			}
+			if err != nil {
+				// any write error kills the session
+				s.die(err)
+			}
+		case <-s.dead:
+			return
+		}
+	}
+}
+
 // reader() reads frames from the underlying transport and handles passes them to handleFrame
 func (s *session) reader() {
 	defer s.recoverPanic("reader()")
@@ -348,22 +361,9 @@ func (s *session) reader() {
 	}
 }
 
-func (s *session) writer() {
-	defer s.recoverPanic("writer()")
-	for {
-		select {
-		case req := <-s.writeFrames:
-			err := fromFrameError(s.framer.WriteFrame(req.f))
-			if req.cb != nil {
-				req.cb(err)
-			}
-			if err != nil {
-				// any write error kills the session
-				s.die(err)
-			}
-		case <-s.dead:
-			return
-		}
+func (s *session) recoverPanic(prefix string) {
+	if r := recover(); r != nil {
+		s.die(newErr(InternalError, fmt.Errorf("%s panic: %v", prefix, r)))
 	}
 }
 
@@ -450,11 +450,6 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 		s.writeFrameAsync(rstF)
 		return
 	}
-	lastRemoteId := frame.StreamId(atomic.LoadUint32(&s.remote.lastId))
-	if f.StreamId() < lastRemoteId {
-		err := fmt.Errorf("initiated stream id 0x%x is less than last remote id: 0x%x", f.StreamId(), lastRemoteId)
-		return newErr(ProtocolError, err)
-	}
 
 	if s.isLocal(f.StreamId()) {
 		err := fmt.Errorf("initiated stream id has wrong parity for remote endpoint: 0x%x", f.StreamId())
@@ -465,14 +460,14 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 	atomic.StoreUint32(&s.remote.lastId, uint32(f.StreamId()))
 
 	// make the new stream
-	str := s.newStream(s, f.StreamId(), s.defaultWindowSize, f.Fin())
+	str := s.newStream(s, f.StreamId(), s.defaultWindowSize, f.Fin(), false)
 
 	// add it to the stream map
 	s.streams.Set(f.StreamId(), str)
 
 	// put the new stream on the accept channel
-retryAccept:
 	var retry bool
+RETRY:
 	select {
 	case s.accept <- str:
 	default:
@@ -489,7 +484,7 @@ retryAccept:
 		if !retry {
 			retry = true
 			time.Sleep(time.Millisecond)
-			goto retryAccept
+			goto RETRY
 		}
 		// accept queue is full
 		rstF := frame.NewRst()
@@ -504,37 +499,8 @@ retryAccept:
 	return str.handleStreamData(f)
 }
 
-func (s *session) recoverPanic(prefix string) {
-	if r := recover(); r != nil {
-		s.die(newErr(InternalError, fmt.Errorf("%s panic: %v", prefix, r)))
-	}
-}
-
-func (s *session) getStream(id frame.StreamId) (str streamPrivate) {
-	// decide if this id is in the "idle" state (i.e. greater than any we've seen for that parity)
-	var lastId *uint32
-	if s.isLocal(id) {
-		lastId = &s.local.lastId
-	} else {
-		lastId = &s.remote.lastId
-	}
-	if uint32(id) > atomic.LoadUint32(lastId) {
-		s.die(newErr(ProtocolError, fmt.Errorf("%d is an invalid, unassigned stream id", id)))
-	}
-
+func (s *session) getStream(id frame.StreamId) streamPrivate {
 	// find the stream in the stream map
-	var ok bool
-	if str, ok = s.streams.Get(id); !ok {
-		return nil
-	}
-	return
-}
-
-// check if a stream id is for a client stream. client streams are odd
-func (s *session) isClient(id frame.StreamId) bool {
-	return uint32(id)&1 == 1
-}
-
-func (s *session) isServer(id frame.StreamId) bool {
-	return !s.isClient(id)
+	str, _ := s.streams.Get(id)
+	return str
 }

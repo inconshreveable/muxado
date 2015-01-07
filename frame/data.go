@@ -5,7 +5,7 @@ import (
 )
 
 type Data struct {
-	*common
+	common
 
 	toRead  io.LimitedReader // when reading, the underlying io.Reader is handed up
 	toWrite []byte           // when writing, these are the bytes to write
@@ -61,8 +61,4 @@ func (f *Data) Pack(streamId StreamId, data []byte, fin bool, syn bool) (err err
 	}
 	f.toWrite = data
 	return
-}
-
-func NewData() *Data {
-	return &Data{common: new(common)}
 }

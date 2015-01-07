@@ -6,9 +6,9 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/inconshreveable/muxado/buffer"
 	"github.com/inconshreveable/muxado/frame"
 )
 
@@ -25,21 +25,24 @@ const (
 )
 
 type stream struct {
-	resetOnce sync.Once // == 1 only if we sent a reset to close this connection
+	synOnce    uint32    // == 0 only if we should send a syn on the next data frame
+	recvWindow uint32    // remaining space in the recv buffer
+	resetOnce  sync.Once // == 1 only if we sent a reset to close this connection
 
 	// just for embedding purposes to avoid heap alloc, use 'window' and 'buf'
 	windowImpl condWindow
-	bufImpl    buffer.CondInbound
+	bufImpl    inboundBuffer
 
-	id            frame.StreamId // stream id (const)
-	session       sessionPrivate // the parent session (const)
-	buf           buffer.Inbound // buffer for data coming in from the remote side
-	window        windowManager  // manages the outbound window
-	writer        sync.Mutex     // only one writer at a time
-	writeDeadline time.Time      // deadline for writes (protected by writer mutex)
-
-	halfCloseMutex sync.Mutex
-	closedState    uint8 // used for determining when both in/out streams are closed
+	id             frame.StreamId // stream id (const)
+	session        sessionPrivate // the parent session (const)
+	buf            buffer         // buffer for data coming in from the remote side
+	window         windowManager  // manages the outbound window
+	writer         sync.Mutex     // only one writer at a time
+	writeDeadline  time.Time      // deadline for writes (protected by writer mutex)
+	windowSize     uint32         // max window size
+	frData         frame.Data     // data frame used in writes
+	halfCloseMutex sync.Mutex     // synchornizes access to half-close tracking state
+	closedState    uint8          // used for determining when both in/out streams are closed
 }
 
 // private interface for Streams to call Sessions
@@ -54,12 +57,15 @@ type sessionPrivate interface {
 ////////////////////////////////
 // public interface
 ////////////////////////////////
-func newStream(sess sessionPrivate, id frame.StreamId, windowSize uint32, fin bool) streamPrivate {
+func newStream(sess sessionPrivate, id frame.StreamId, windowSize uint32, fin bool, init bool) streamPrivate {
 	str := &stream{
-		id: id,
-		//inBuffer: buffer.NewChannelInbound(int(windowSize)),
-		//inBuffer:  buffer.NewDirectInbound(int(windowSize)),
-		session: sess,
+		id:         id,
+		session:    sess,
+		windowSize: windowSize,
+		recvWindow: windowSize,
+	}
+	if !init {
+		str.synOnce = 1
 	}
 	str.windowImpl.Init(int(windowSize))
 	str.window = &str.windowImpl
@@ -76,15 +82,19 @@ func (s *stream) Write(buf []byte) (n int, err error) {
 	return s.write(buf, false)
 }
 
-func (s *stream) Read(buf []byte) (n int, err error) {
+func (s *stream) Read(buf []byte) (int, error) {
 	// read from the buffer
-	n, err = s.buf.Read(buf)
-
-	// if we read more than zero, we send a window update
+	n, err := s.buf.Read(buf)
 	if n > 0 {
-		s.sendWindowUpdate(uint32(n))
+		maxWinSize := s.windowSize
+		recvWindow := atomic.AddUint32(&s.recvWindow, ^uint32(n-1))
+		if recvWindow < maxWinSize/2 {
+			if atomic.CompareAndSwapUint32(&s.recvWindow, recvWindow, maxWinSize) {
+				s.sendWindowUpdate(maxWinSize - recvWindow)
+			}
+		}
 	}
-	return
+	return n, err
 }
 
 // Close closes the stream in a manner that attempts to emulate a net.Conn's Close():
@@ -149,13 +159,13 @@ func (s *stream) handleStreamData(f *frame.Data) error {
 	if f.Length() > 0 {
 		// write the data into the buffer
 		if _, err := s.buf.ReadFrom(f.Reader()); err != nil {
-			if err == buffer.FullError {
+			if err == bufferFull {
 				s.resetWith(FlowControlError, flowControlViolated)
 			} else if err == closeError {
 				// We're trying to emulate net.Conn's Close() behavior where we close our side of the connection,
 				// and if we get any more frames from the other side, we RST it.
 				s.resetWith(StreamClosed, streamClosed)
-			} else if err == buffer.AlreadyClosed {
+			} else if err == bufferClosed {
 				// there was already an error set
 				s.resetWith(StreamClosed, streamClosed)
 			} else {
@@ -236,6 +246,11 @@ func (s *stream) resetWith(errorCode ErrorCode, resetErr error) {
 }
 
 func (s *stream) write(buf []byte, fin bool) (n int, err error) {
+	var synFlag bool
+	if atomic.CompareAndSwapUint32(&s.synOnce, 0, 1) {
+		synFlag = true
+	}
+
 	// a write call can pass a buffer larger that we can send in a single frame
 	// only allow one writer at a time to prevent interleaving frames from concurrent writes
 	s.writer.Lock()
@@ -258,18 +273,17 @@ func (s *stream) write(buf []byte, fin bool) (n int, err error) {
 		start, end := n, n+writeSize
 
 		// only send fin for the last frame
-		finBit := fin && end == bufSize
+		finFlag := fin && end == bufSize
 
 		// make the frame
-		data := frame.NewData()
-		if err = data.Pack(s.id, buf[start:end], finBit, false); err != nil {
+		if err = s.frData.Pack(s.id, buf[start:end], finFlag, synFlag); err != nil {
 			err = newErr(InternalError, fmt.Errorf("failed to pack DATA frame: %v", err))
 			s.writer.Unlock()
 			return
 		}
 
 		// write the frame
-		if err = s.session.writeFrame(data, s.writeDeadline); err != nil {
+		if err = s.session.writeFrame(&s.frData, s.writeDeadline); err != nil {
 			s.writer.Unlock()
 			return
 		}
@@ -278,13 +292,14 @@ func (s *stream) write(buf []byte, fin bool) (n int, err error) {
 		n += writeSize
 		bytesRemaining -= writeSize
 
-		if finBit {
+		if finFlag {
 			s.window.SetError(streamClosed)
 			s.maybeRemove(halfClosedOutbound)
 
 			// handles the empty buffer with fin case
 			fin = false
 		}
+		synFlag = false
 	}
 
 	s.writer.Unlock()
@@ -300,10 +315,7 @@ func (s *stream) sendWindowUpdate(inc uint32) {
 		s.session.die(newErr(InternalError, fmt.Errorf("failed to pack WNDINC frame: %v", err)))
 		return
 	}
-	// XXX: write this async? We can only write one at
-	// a time if we're not allocating new ones from the heap
 	s.session.writeFrameAsync(wndinc)
-	//s.session.writeFrame(wndinc, zeroTime)
 }
 
 func min(n1, n2 int) int {

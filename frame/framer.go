@@ -49,6 +49,7 @@ func (fr *framer) ReadFrame() (f Frame, err error) {
 		f = &fr.Rst
 	case TypeData:
 		f = &fr.Data
+		fr.Data.common = fr.common
 	case TypeWndInc:
 		f = &fr.WndInc
 	case TypeGoAway:
@@ -66,7 +67,7 @@ func NewFramer(r io.Reader, w io.Writer) Framer {
 		Writer: w,
 	}
 	fr.Rst.common = &fr.common
-	fr.Data.common = &fr.common
+	//fr.Data.common = &fr.common
 	fr.WndInc.common = &fr.common
 	fr.GoAway.common = &fr.common
 	return fr
