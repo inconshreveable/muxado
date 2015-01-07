@@ -44,10 +44,6 @@
 //
 // A "Session" is two peers running the muxado protocol over a single transport
 //
-// this by chunking data sent over each stream into frames and then reassembling the
-// frames and buffering the data before being passed up to the application
-// layer on the other side.
-//
 // muxado's design is influenced heavily by the framing layer of HTTP2 and SPDY. However, instead
 // of being specialized for a higher-level protocol, muxado is designed in a protocol agnostic way
 // with simplicity and speed in mind. More advanced features are left to higher-level libraries and protocols.
