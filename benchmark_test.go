@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math"
 	"net"
 	"sync"
 	"testing"
@@ -89,8 +88,8 @@ func BenchmarkPayload64MBStreams256(b *testing.B) {
 func testCase(b *testing.B, payloadSize int64, concurrency int) {
 	done := make(chan int)
 	c, s := memTransport()
-	sessFactory := newMuxadoAdaptor
-	//sessFactory := newYamuxAdaptor
+	//sessFactory := newMuxadoAdaptor
+	sessFactory := newYamuxAdaptor
 	go client(b, sessFactory(c, false), payloadSize)
 	go server(b, sessFactory(s, true), payloadSize, concurrency, done)
 	<-done
@@ -99,39 +98,35 @@ func testCase(b *testing.B, payloadSize int64, concurrency int) {
 func server(b *testing.B, sess muxSession, payloadSize int64, concurrency int, done chan int) {
 	go wait(b, sess, "server")
 
-	payloads := make([]*alot, concurrency)
-	for i := 0; i < concurrency; i++ {
-		payloads[i] = &alot{n: payloadSize}
-	}
-
+	p := new(alot)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for _, p := range payloads {
-			p.Reset()
-		}
 		var wg sync.WaitGroup
 		wg.Add(concurrency)
 		start := make(chan int)
 		for c := 0; c < concurrency; c++ {
-			go func(p *alot) {
+			go func() {
 				<-start
 				str, err := sess.OpenStream()
 				if err != nil {
 					panic(err)
 				}
 				go func() {
-					io.CopyN(ioutil.Discard, str, payloadSize)
+					_, err := io.CopyN(ioutil.Discard, str, payloadSize)
+					if err != nil {
+						panic(err)
+					}
 					wg.Done()
-					//str.Close()
+					str.Close()
 				}()
-				n, err := io.Copy(str, p)
+				n, err := io.CopyN(str, p, payloadSize)
 				if n != payloadSize {
 					b.Errorf("Server failed to send full payload. Got %d, expected %d", n, payloadSize)
 				}
 				if err != nil {
 					panic(err)
 				}
-			}(payloads[c])
+			}()
 		}
 		close(start)
 		wg.Wait()
@@ -149,7 +144,7 @@ func client(b *testing.B, sess muxSession, expectedSize int64) {
 		}
 
 		go func(s muxStream) {
-			n, err := io.Copy(s, s)
+			n, err := io.CopyN(s, s, expectedSize)
 			if err != nil {
 				panic(err)
 			}
@@ -174,26 +169,11 @@ func wait(b *testing.B, sess muxSession, name string) {
 var sourceBuf = bytes.Repeat([]byte("0123456789"), 12800)
 
 type alot struct {
-	n     int64
-	count int64
 }
 
 func (a *alot) Read(p []byte) (int, error) {
-	if a.count >= a.n {
-		return 0, io.EOF
-	}
-
-	remaining := float64(a.n - a.count)
-	nbuf := float64(len(p))
-	n := int64(math.Min(nbuf, remaining))
-
-	copy(p, sourceBuf[:n])
-	a.count += n
-	return int(n), nil
-}
-
-func (a *alot) Reset() {
-	a.count = 0
+	copy(p, sourceBuf)
+	return len(p), nil
 }
 
 func tcpTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {

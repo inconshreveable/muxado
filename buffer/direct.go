@@ -21,7 +21,7 @@ type waitingReader struct {
 	n   int
 }
 
-type Inbound struct {
+type directInbound struct {
 	*Circular
 	*sync.Cond
 	err error
@@ -30,14 +30,14 @@ type Inbound struct {
 	timer    *time.Timer
 }
 
-func NewInbound(size int) *Inbound {
-	return &Inbound{
+func NewDirectInbound(size int) Inbound {
+	return &directInbound{
 		Circular: NewCircular(size),
 		Cond:     sync.NewCond(new(sync.Mutex)),
 	}
 }
 
-func (b *Inbound) SetDeadline(t time.Time) {
+func (b *directInbound) SetDeadline(t time.Time) {
 	b.L.Lock()
 
 	// set the deadline
@@ -58,21 +58,14 @@ func (b *Inbound) SetDeadline(t time.Time) {
 	b.L.Unlock()
 }
 
-func (b *Inbound) SetError(err error) {
+func (b *directInbound) SetError(err error) {
 	b.L.Lock()
 	b.err = err
 	b.Broadcast()
 	b.L.Unlock()
 }
 
-func (b *Inbound) GetError() (err error) {
-	b.L.Lock()
-	err = b.err
-	b.L.Unlock()
-	return
-}
-
-func (b *Inbound) ReadFrom(rd io.Reader) (n int, err error) {
+func (b *directInbound) ReadFrom(rd io.Reader) (n int, err error) {
 	b.L.Lock()
 
 	if b.err != nil {
@@ -110,7 +103,7 @@ func (b *Inbound) ReadFrom(rd io.Reader) (n int, err error) {
 	return
 }
 
-func (b *Inbound) Read(p []byte) (n int, err error) {
+func (b *directInbound) Read(p []byte) (n int, err error) {
 	b.L.Lock()
 
 	var wait *waitingReader

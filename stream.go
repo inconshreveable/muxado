@@ -1,11 +1,11 @@
 package muxado
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/inconshreveable/muxado/buffer"
@@ -14,25 +14,39 @@ import (
 
 var (
 	zeroTime         time.Time
-	resetRemoveDelay = 10 * time.Second
-	closeError       = fmt.Errorf("Stream closed")
+	resetRemoveDelay = 5 * time.Second
+	closeError       = newErr(StreamClosed, errors.New("stream closed"))
+)
+
+const (
+	halfClosedInbound  = 0x1
+	halfClosedOutbound = 0x2
+	fullyClosed        = 0x3
 )
 
 type stream struct {
-	resetOnce     uint32           // == 1 only if we sent a reset to close this connection
-	id            frame.StreamId   // stream id (const)
-	session       sessionPrivate   // the parent session (const)
-	inBuffer      *buffer.Inbound  // buffer for data coming in from the remote side
-	outBuffer     *buffer.Outbound // manages size of the outbound window
-	writer        sync.Mutex       // only one writer at a time
-	readDeadline  time.Time        // deadline for reads (protected by buffer mutex)
-	writeDeadline time.Time        // deadline for writes (protected by writer mutex)
+	resetOnce sync.Once // == 1 only if we sent a reset to close this connection
+
+	// just for embedding purposes to avoid heap alloc, use 'window' and 'buf'
+	windowImpl condWindow
+	bufImpl    buffer.CondInbound
+
+	id            frame.StreamId // stream id (const)
+	session       sessionPrivate // the parent session (const)
+	buf           buffer.Inbound // buffer for data coming in from the remote side
+	window        windowManager  // manages the outbound window
+	writer        sync.Mutex     // only one writer at a time
+	writeDeadline time.Time      // deadline for writes (protected by writer mutex)
+
+	halfCloseMutex sync.Mutex
+	closedState    uint8 // used for determining when both in/out streams are closed
 }
 
 // private interface for Streams to call Sessions
 type sessionPrivate interface {
 	Session
 	writeFrame(frame.Frame, time.Time) error
+	writeFrameAsync(frame.Frame) error
 	die(error) error
 	removeStream(frame.StreamId)
 }
@@ -42,13 +56,18 @@ type sessionPrivate interface {
 ////////////////////////////////
 func newStream(sess sessionPrivate, id frame.StreamId, windowSize uint32, fin bool) streamPrivate {
 	str := &stream{
-		id:        id,
-		inBuffer:  buffer.NewInbound(int(windowSize)),
-		outBuffer: buffer.NewOutbound(int(windowSize)),
-		session:   sess,
+		id: id,
+		//inBuffer: buffer.NewChannelInbound(int(windowSize)),
+		//inBuffer:  buffer.NewDirectInbound(int(windowSize)),
+		session: sess,
 	}
+	str.windowImpl.Init(int(windowSize))
+	str.window = &str.windowImpl
+	str.bufImpl.Init(int(windowSize))
+	str.buf = &str.bufImpl
+
 	if fin {
-		str.outBuffer.SetError(fmt.Errorf("Stream closed"))
+		str.window.SetError(streamClosed)
 	}
 	return str
 }
@@ -59,7 +78,7 @@ func (s *stream) Write(buf []byte) (n int, err error) {
 
 func (s *stream) Read(buf []byte) (n int, err error) {
 	// read from the buffer
-	n, err = s.inBuffer.Read(buf)
+	n, err = s.buf.Read(buf)
 
 	// if we read more than zero, we send a window update
 	if n > 0 {
@@ -69,9 +88,10 @@ func (s *stream) Read(buf []byte) (n int, err error) {
 }
 
 // Close closes the stream in a manner that attempts to emulate a net.Conn's Close():
-// - It calls HalfClose() with an empty buffer to half-close the stream on the remote side
+// - It calls CloseWrite() to half-close the stream on the remote side
 // - It calls closeWith() so that all future Read/Write operations will fail
-// - If the stream receives another STREAM_DATA frame from the remote side, it will send a STREAM_RST with a CANCELED error code
+// - If the stream receives another STREAM_DATA frame (except an empty one with a FIN)
+//   from the remote side, it will send a STREAM_RST with a CANCELED error code
 func (s *stream) Close() error {
 	s.CloseWrite()
 	s.closeWith(closeError)
@@ -89,7 +109,7 @@ func (s *stream) SetDeadline(deadline time.Time) (err error) {
 }
 
 func (s *stream) SetReadDeadline(dl time.Time) error {
-	s.inBuffer.SetDeadline(dl)
+	s.buf.SetDeadline(dl)
 	return nil
 }
 
@@ -128,7 +148,7 @@ func (s *stream) handleStreamData(f *frame.Data) error {
 	// skip writing for zero-length frames (typically for sending FIN)
 	if f.Length() > 0 {
 		// write the data into the buffer
-		if _, err := s.inBuffer.ReadFrom(f.Reader()); err != nil {
+		if _, err := s.buf.ReadFrom(f.Reader()); err != nil {
 			if err == buffer.FullError {
 				s.resetWith(FlowControlError, flowControlViolated)
 			} else if err == closeError {
@@ -146,68 +166,73 @@ func (s *stream) handleStreamData(f *frame.Data) error {
 		}
 	}
 	if f.Fin() {
-		s.inBuffer.SetError(io.EOF)
-		s.maybeRemove()
+		s.buf.SetError(io.EOF)
+		s.maybeRemove(halfClosedInbound)
 	}
 	return nil
 }
 
 func (s *stream) handleStreamRst(f *frame.Rst) error {
-	s.closeWith(newErr(StreamReset, fmt.Errorf("Stream reset by peer with error: %s", f.ErrorCode())))
+	s.closeWith(newErr(ErrorCode(f.ErrorCode()), fmt.Errorf("Stream reset by peer: %s", f.ErrorCode())))
 	return nil
 }
 
 func (s *stream) handleStreamWndInc(f *frame.WndInc) error {
-	s.outBuffer.Increment(int(f.WindowIncrement()))
+	s.window.Increment(int(f.WindowIncrement()))
 	return nil
 }
 
 func (s *stream) closeWith(err error) {
-	s.outBuffer.SetError(err)
-	s.inBuffer.SetError(err)
-	s.session.removeStream(s.id)
+	s.window.SetError(err)
+	s.buf.SetError(err)
+	s.removeFromSession()
 }
 
 ////////////////////////////////
 // internal methods
 ////////////////////////////////
 
-func (s *stream) closeWithAndRemoveLater(err error) {
-	s.outBuffer.SetError(err)
-	s.inBuffer.SetError(err)
-	time.AfterFunc(resetRemoveDelay, func() {
-		s.session.removeStream(s.id)
-	})
+func (s *stream) removeFromSession() {
+	s.session.removeStream(s.id)
 }
 
-func (s *stream) maybeRemove() {
-	if buffer.BothClosed(s.inBuffer, s.outBuffer) {
-		s.session.removeStream(s.id)
+func (s *stream) closeWithAndRemoveLater(err error) {
+	s.window.SetError(err)
+	s.buf.SetError(err)
+	time.AfterFunc(resetRemoveDelay, s.removeFromSession)
+}
+
+func (s *stream) maybeRemove(closeFlag uint8) {
+	s.halfCloseMutex.Lock()
+	s.closedState |= closeFlag
+	remove := s.closedState == fullyClosed
+	s.halfCloseMutex.Unlock()
+
+	if remove {
+		s.removeFromSession()
 	}
 }
 
 func (s *stream) resetWith(errorCode ErrorCode, resetErr error) {
 	// only ever send one reset
-	if !atomic.CompareAndSwapUint32(&s.resetOnce, 0, 1) {
-		return
-	}
+	s.resetOnce.Do(func() {
+		// close the stream
+		s.closeWithAndRemoveLater(resetErr)
 
-	// close the stream
-	s.closeWithAndRemoveLater(resetErr)
+		// make the reset frame
+		rst := frame.NewRst()
+		if err := rst.Pack(s.id, frame.ErrorCode(errorCode)); err != nil {
+			s.session.die(newErr(InternalError, fmt.Errorf("failed to pack RST frame: %v", err)))
+			return
+		}
 
-	// make the reset frame
-	rst := frame.NewRst()
-	if err := rst.Pack(s.id, frame.ErrorCode(errorCode)); err != nil {
-		s.session.die(newErr(InternalError, fmt.Errorf("failed to pack RST frame: %v", err)))
-		return
-	}
+		// need write lock to make sure no data frames get sent after we send the reset
+		s.writer.Lock()
+		defer s.writer.Unlock()
 
-	// need write lock to make sure no data frames get sent after we send the reset
-	s.writer.Lock()
-	defer s.writer.Unlock()
-
-	// send it
-	s.session.writeFrame(rst, zeroTime)
+		// send it
+		s.session.writeFrame(rst, zeroTime)
+	})
 }
 
 func (s *stream) write(buf []byte, fin bool) (n int, err error) {
@@ -219,12 +244,12 @@ func (s *stream) write(buf []byte, fin bool) (n int, err error) {
 	bytesRemaining := bufSize
 	for bytesRemaining > 0 || fin {
 		// figure out the most we can write in a single frame
-		writeReqSize := min(0x3FFF, bytesRemaining)
+		writeReqSize := min(0x00FFFFFF, bytesRemaining)
 
 		// and then reduce that to however much is available in the window
 		// this blocks until window is available and may not return all that we asked for
 		var writeSize int
-		if writeSize, err = s.outBuffer.Decrement(writeReqSize); err != nil {
+		if writeSize, err = s.window.Decrement(writeReqSize); err != nil {
 			s.writer.Unlock()
 			return
 		}
@@ -254,8 +279,8 @@ func (s *stream) write(buf []byte, fin bool) (n int, err error) {
 		bytesRemaining -= writeSize
 
 		if finBit {
-			s.outBuffer.SetError(streamClosed)
-			s.maybeRemove()
+			s.window.SetError(streamClosed)
+			s.maybeRemove(halfClosedOutbound)
 
 			// handles the empty buffer with fin case
 			fin = false
@@ -277,7 +302,8 @@ func (s *stream) sendWindowUpdate(inc uint32) {
 	}
 	// XXX: write this async? We can only write one at
 	// a time if we're not allocating new ones from the heap
-	s.session.writeFrame(wndinc, zeroTime)
+	s.session.writeFrameAsync(wndinc)
+	//s.session.writeFrame(wndinc, zeroTime)
 }
 
 func min(n1, n2 int) int {

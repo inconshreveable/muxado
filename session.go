@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultWindowSize       = 0x10000 // 64KB
-	defaultAcceptQueueDepth = 256
+	defaultAcceptQueueDepth = 128
 )
 
 // private interface for Sessions to call Streams
@@ -123,6 +123,7 @@ func (s *session) OpenStream() (Stream, error) {
 	// get the next id we can use
 	nextId := frame.StreamId(atomic.AddUint32(&s.local.lastId, 2))
 	if nextId&(1<<31) > 0 {
+		s.newStreamMutex.Unlock()
 		return nil, streamsExhausted
 	}
 
@@ -137,15 +138,9 @@ func (s *session) OpenStream() (Stream, error) {
 		return nil, newErr(InternalError, err)
 	}
 
-	// we can't use writeFrame here because we're holding the stream mutex
-	// we get conncurrency by releasing the lock after the channel send
-	// but before we wait for an error
-	err := s.writeFrame(f, zeroTime)
+	err := s.writeFrameAsync(f)
 	s.newStreamMutex.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	return str, nil
+	return str, err
 }
 
 func (s *session) AcceptStream() (str Stream, err error) {
@@ -178,10 +173,7 @@ func (s *session) GoAway(errCode ErrorCode, debug []byte, dl time.Time) (err err
 	if err := f.Pack(remoteId, frame.ErrorCode(errCode), debug); err != nil {
 		return fromFrameError(err)
 	}
-	if err := s.writeFrameSync(f, dl); err != nil {
-		return err
-	}
-	return nil
+	return s.writeFrameSync(f, dl)
 }
 
 type addr struct {
@@ -277,10 +269,16 @@ func (s *session) writeFrameSync(f frame.Frame, dl time.Time) error {
 	return s.writeFrame(f, dl)
 }
 
-// like writeFrame but it returns immediately
+// like writeFrame but it returns immediately, do not use with any frame/buffer that will be reused
+// or free'd
 func (s *session) writeFrameAsync(f frame.Frame) error {
-	go s.writeFrame(f, zeroTime)
-	return nil
+	var req = writeReq{f: f}
+	select {
+	case s.writeFrames <- req:
+		return nil
+	case <-s.dead:
+		return sessionClosed
+	}
 }
 
 // die closes the session cleanly with the given error and protocol error code
@@ -309,7 +307,7 @@ func (s *session) die(err error) error {
 
 	// notify all of the streams that we're closing
 	s.streams.Each(func(id frame.StreamId, str streamPrivate) {
-		str.closeWith(fmt.Errorf("Session closed"))
+		str.closeWith(sessionClosed)
 	})
 
 	return nil
@@ -379,6 +377,17 @@ func (s *session) handleFrame(rf frame.Frame) error {
 
 		str := s.getStream(f.StreamId())
 		if str == nil {
+			// Diverging from the HTTP2 spec here. If we receive a FIN on a
+			// a stream that doesn't exist, we'll just ignore it. This allows
+			// stream.Close() to fully deallocate a stream without worrying
+			// about a buggy implementation on the remote side keeping
+			// memory allocated.
+			// XXX: maybe remove this by having the stream just dellocate its
+			// buffer and then a max open streams cap will take care of the memory attack
+			if f.Length() == 0 && f.Fin() {
+				return nil
+			}
+
 			// if we get a data frame on a non-existent connection, we still
 			// need to read out the frame body so that the stream stays in a
 			// good state.
@@ -462,15 +471,33 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 	s.streams.Set(f.StreamId(), str)
 
 	// put the new stream on the accept channel
+retryAccept:
+	var retry bool
 	select {
 	case s.accept <- str:
-	case <-time.After(5 * time.Millisecond):
+	default:
+		// The accept channel is full.
+		//
+		// The Go scheduler can put you into a place where there are goroutines
+		// waiting to accept from the full channel but this Goroutine is hogging
+		// the CPU and would continuously read new streams and throw them away
+		// We tell the runtime to sleep this goroutine for a short amount of time
+		// in order to let other goroutines run.
+		//
+		// The use of time.Sleep + goto instead of using time.After() in the select
+		// statement is to avoid a memory alloc in the hot path
+		if !retry {
+			retry = true
+			time.Sleep(time.Millisecond)
+			goto retryAccept
+		}
 		// accept queue is full
 		rstF := frame.NewRst()
 		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(AcceptQueueFull)); err != nil {
 			return newErr(InternalError, fmt.Errorf("failed to pack accept overflow RST: %v", err))
 		}
 		s.writeFrameAsync(rstF)
+		// XXX close the stream!
 	}
 
 	// handle the stream data
