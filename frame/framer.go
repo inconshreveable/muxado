@@ -47,13 +47,16 @@ func (fr *framer) ReadFrame() (f Frame, err error) {
 	switch fr.common.ftype {
 	case TypeRst:
 		f = &fr.Rst
+		fr.Rst.common = fr.common
 	case TypeData:
 		f = &fr.Data
 		fr.Data.common = fr.common
 	case TypeWndInc:
 		f = &fr.WndInc
+		fr.WndInc.common = fr.common
 	case TypeGoAway:
 		f = &fr.GoAway
+		fr.GoAway.common = fr.common
 	default:
 		// XXX: ignore unknown frame types instead
 		return nil, fmt.Errorf("Illegal frame type: 0x%x", fr.common.ftype)
@@ -66,10 +69,6 @@ func NewFramer(r io.Reader, w io.Writer) Framer {
 		Reader: r,
 		Writer: w,
 	}
-	fr.Rst.common = &fr.common
-	//fr.Data.common = &fr.common
-	fr.WndInc.common = &fr.common
-	fr.GoAway.common = &fr.common
 	return fr
 }
 

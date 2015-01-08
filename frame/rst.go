@@ -8,7 +8,7 @@ const (
 
 // Rst is a frame sent to forcibly close a stream
 type Rst struct {
-	*common
+	common
 }
 
 func (f *Rst) ErrorCode() ErrorCode {
@@ -41,5 +41,5 @@ func (f *Rst) Pack(streamId StreamId, errorCode ErrorCode) (err error) {
 }
 
 func NewRst() (f *Rst) {
-	return &Rst{common: new(common)}
+	return new(Rst)
 }

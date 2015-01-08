@@ -5,7 +5,7 @@ import "io"
 const goAwayFrameLength = 8
 
 type GoAway struct {
-	*common
+	common
 	debug []byte
 }
 
@@ -62,5 +62,5 @@ func (f *GoAway) Pack(lastStreamId StreamId, errCode ErrorCode, debug []byte) (e
 }
 
 func NewGoAway() (f *GoAway) {
-	return &GoAway{common: new(common)}
+	return new(GoAway)
 }

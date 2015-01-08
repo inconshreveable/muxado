@@ -79,7 +79,7 @@ func TestData(t *testing.T) {
 	// test serialization
 	for _, dt := range dataTests {
 		buf := new(bytes.Buffer)
-		var f *Data = NewData()
+		var f *Data = new(Data)
 		err := f.Pack(dt.streamId, dt.data, dt.fin, false)
 		switch {
 		case err != nil && !dt.serializeError:
@@ -107,7 +107,7 @@ func TestData(t *testing.T) {
 			continue
 		}
 		buf := bytes.NewReader(dt.serialized)
-		var f *Data = NewData()
+		var f *Data = new(Data)
 		if err := f.common.readFrom(buf); err != nil {
 			t.Errorf("failed read frame header: %v, %+v", err, dt)
 			continue
@@ -128,7 +128,7 @@ func TestLengthLimitation(t *testing.T) {
 	dt := dataTests[0]
 	buf := bytes.NewBuffer(dt.serialized)
 	buf.Write([]byte("extra data that shouldn't be read"))
-	var f *Data = NewData()
+	var f *Data = new(Data)
 	if err := f.common.readFrom(buf); err != nil {
 		t.Fatalf("failed read frame header: %v, %+v", err, dt)
 	}
@@ -142,13 +142,13 @@ func TestLengthLimitation(t *testing.T) {
 func TestDataFramer(t *testing.T) {
 	t.Parallel()
 	buf := new(bytes.Buffer)
-	fr := NewFramer(buf)
+	fr := NewFramer(buf, buf)
 
 	for _, dt := range dataTests {
 		if dt.serializeError {
 			continue
 		}
-		var f *Data = NewData()
+		var f *Data = new(Data)
 		err := f.Pack(dt.streamId, dt.data, dt.fin, false)
 		if err != nil {
 			t.Errorf("failed to pack: %v", err)

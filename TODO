@@ -3,6 +3,7 @@ Use buffered io? Optionally? When would you flush?
 Move high throughput connections to their own connections
 Use a ring buffer?
 Mitigate allocation of windowupdates (pool?)
+Add Config to control window size, accept queue depth (stream factory?), framer and more
 
 DOCS:
 Write a more extensive example

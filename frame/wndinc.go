@@ -11,7 +11,7 @@ const (
 
 // Increase a stream's flow control window size
 type WndInc struct {
-	*common
+	common
 }
 
 func (f *WndInc) WindowIncrement() uint32 {
@@ -47,8 +47,4 @@ func (f *WndInc) Pack(streamId StreamId, inc uint32) (err error) {
 	}
 	order.PutUint32(f.body(), inc)
 	return
-}
-
-func NewWndInc() (f *WndInc) {
-	return &WndInc{new(common)}
 }

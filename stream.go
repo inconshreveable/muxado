@@ -310,12 +310,12 @@ func (s *stream) write(buf []byte, fin bool) (n int, err error) {
 // with the given increment
 func (s *stream) sendWindowUpdate(inc uint32) {
 	// send a window update
-	wndinc := frame.NewWndInc()
+	var wndinc frame.WndInc
 	if err := wndinc.Pack(s.id, inc); err != nil {
 		s.session.die(newErr(InternalError, fmt.Errorf("failed to pack WNDINC frame: %v", err)))
 		return
 	}
-	s.session.writeFrameAsync(wndinc)
+	s.session.writeFrameAsync(&wndinc)
 }
 
 func min(n1, n2 int) int {
