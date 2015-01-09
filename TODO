@@ -1,3 +1,6 @@
+API:
+Fix errors returned by Accept() to be muxadoError
+
 PERF:
 Use buffered io? Optionally? When would you flush?
 Move high throughput connections to their own connections
@@ -6,6 +9,8 @@ Mitigate allocation of windowupdates (pool?)
 Add Config to control window size, accept queue depth (stream factory?), framer and more
 
 DOCS:
+Doc heartbeat and TypedStreamSession
+Doc Accept() returning an error only when the session is closed
 Write a more extensive example
 Document the muxado wire protocol
 
@@ -23,7 +28,9 @@ More stream tests
 Write frame/framer tests - verify read correct type, verify unknown type causes error, verify proper errors
 
 ### Low priority:
+accept could select{} on the .dead channel as well
 window_manager needs to support a deadline
+inboundbuffer deadline support
 add Reset() stream API?
 eliminate unlikely race on s.remoteDebug between handleFrame() and die()
 don't send reset if the stream is fully closed

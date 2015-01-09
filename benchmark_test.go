@@ -2,14 +2,19 @@ package muxado
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/yamux"
+	"golang.org/x/crypto/ssh"
 )
 
 type muxSession interface {
@@ -87,11 +92,12 @@ func BenchmarkPayload64MBStreams256(b *testing.B) {
 
 func testCase(b *testing.B, payloadSize int64, concurrency int) {
 	done := make(chan int)
-	c, s := memTransport()
+	c, s := tcpTransport()
 	sessFactory := newMuxadoAdaptor
 	//sessFactory := newYamuxAdaptor
+	//sessFactory := newSSHAdaptor
+	go func() { server(b, sessFactory(s, true), payloadSize, concurrency, done) }()
 	go client(b, sessFactory(c, false), payloadSize)
-	go server(b, sessFactory(s, true), payloadSize, concurrency, done)
 	<-done
 }
 
@@ -274,3 +280,73 @@ func newYamuxAdaptor(rwc io.ReadWriteCloser, isServer bool) muxSession {
 	}
 	return &yamuxAdaptor{sess}
 }
+
+type sshAdaptor struct {
+	ssh.Conn
+	channels <-chan ssh.NewChannel
+}
+
+func (a *sshAdaptor) OpenStream() (muxStream, error) {
+	c, reqs, err := a.Conn.OpenChannel("", []byte{})
+	if err != nil {
+		return nil, err
+	}
+	go ssh.DiscardRequests(reqs)
+	return c, nil
+}
+
+func (a *sshAdaptor) AcceptStream() (muxStream, error) {
+	newChannel, ok := <-a.channels
+	if !ok {
+		return nil, errors.New("SSH Session closed")
+	}
+	channel, reqs, err := newChannel.Accept()
+	if err != nil {
+		return nil, err
+	}
+	go ssh.DiscardRequests(reqs)
+	return channel, nil
+}
+
+func (a *sshAdaptor) Wait() (error, error, []byte) {
+	return a.Conn.Wait(), nil, nil
+}
+
+func newSSHAdaptor(rwc io.ReadWriteCloser, isServer bool) muxSession {
+	var (
+		conn           ssh.Conn
+		newChannels    <-chan ssh.NewChannel
+		globalRequests <-chan *ssh.Request
+		err            error
+	)
+	if isServer {
+		sconf := &ssh.ServerConfig{NoClientAuth: true}
+		privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			panic(err)
+		}
+		signer, err := ssh.NewSignerFromKey(privKey)
+		if err != nil {
+			panic(err)
+		}
+		sconf.AddHostKey(signer)
+		conn, newChannels, globalRequests, err = ssh.NewServerConn(&rwcConn{rwc}, sconf)
+	} else {
+		conn, newChannels, globalRequests, err = ssh.NewClientConn(&rwcConn{rwc}, "", new(ssh.ClientConfig))
+	}
+	if err != nil {
+		panic(err)
+	}
+	go ssh.DiscardRequests(globalRequests)
+	return &sshAdaptor{conn, newChannels}
+}
+
+type rwcConn struct {
+	io.ReadWriteCloser
+}
+
+func (c *rwcConn) LocalAddr() net.Addr              { return nil }
+func (c *rwcConn) RemoteAddr() net.Addr             { return nil }
+func (c *rwcConn) SetDeadline(time.Time) error      { return nil }
+func (c *rwcConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *rwcConn) SetWriteDeadline(time.Time) error { return nil }
