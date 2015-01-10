@@ -91,73 +91,73 @@ type common struct {
 	b        [maxBufferSize]byte
 }
 
-func (c *common) StreamId() StreamId {
-	return c.streamId
+func (f *common) StreamId() StreamId {
+	return f.streamId
 }
 
-func (c *common) Length() uint32 {
-	return c.length
+func (f *common) Length() uint32 {
+	return f.length
 }
 
-func (c *common) Type() Type {
-	return c.ftype
+func (f *common) Type() Type {
+	return f.ftype
 }
 
-func (c *common) Flags() Flags {
-	return c.flags
+func (f *common) Flags() Flags {
+	return f.flags
 }
 
-func (c *common) readFrom(r io.Reader) error {
-	b := c.b[:headerSize]
+func (f *common) readFrom(r io.Reader) error {
+	b := f.b[:headerSize]
 	if _, err := io.ReadFull(r, b); err != nil {
 		return err
 	}
-	c.length = (uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2]))
-	c.ftype = Type(b[3] >> 4)
-	c.flags = Flags(b[3] & flagsMask)
-	c.streamId = StreamId(order.Uint32(b[4:]))
+	f.length = (uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2]))
+	f.ftype = Type(b[3] >> 4)
+	f.flags = Flags(b[3] & flagsMask)
+	f.streamId = StreamId(order.Uint32(b[4:]))
 	return nil
 }
 
-func (c *common) writeTo(w io.Writer, fixedSize int) error {
-	_, err := w.Write(c.b[:headerSize+fixedSize])
+func (f *common) writeTo(w io.Writer, fixedSize int) error {
+	_, err := w.Write(f.b[:headerSize+fixedSize])
 	return err
 }
 
-func (c *common) pack(ftype Type, length int, streamId StreamId, flags Flags) error {
+func (f *common) pack(ftype Type, length int, streamId StreamId, flags Flags) error {
 	if err := streamId.valid(); err != nil {
 		return err
 	}
 	if !isValidLength(length) {
 		return fmt.Errorf("invalid length: %d", length)
 	}
-	c.ftype = ftype
-	c.streamId = streamId
-	c.length = uint32(length)
-	c.flags = flags
-	_ = append(c.b[:0],
-		byte(c.length>>16),
-		byte(c.length>>8),
-		byte(c.length),
-		byte(uint8(c.ftype<<4)|uint8(c.flags&flagsMask)),
-		byte(c.streamId>>24),
-		byte(c.streamId>>16),
-		byte(c.streamId>>8),
-		byte(c.streamId),
+	f.ftype = ftype
+	f.streamId = streamId
+	f.length = uint32(length)
+	f.flags = flags
+	_ = append(f.b[:0],
+		byte(f.length>>16),
+		byte(f.length>>8),
+		byte(f.length),
+		byte(uint8(f.ftype<<4)|uint8(f.flags&flagsMask)),
+		byte(f.streamId>>24),
+		byte(f.streamId>>16),
+		byte(f.streamId>>8),
+		byte(f.streamId),
 	)
 	return nil
 }
 
-func (c *common) body() []byte {
-	return c.b[headerSize:]
+func (f *common) body() []byte {
+	return f.b[headerSize:]
 }
 
-func (c *common) String() string {
+func (f *common) String() string {
 	s := fmt.Sprintf(
 		"FRAME [TYPE: %s | LENGTH: %d | STREAMID: %x | FLAGS: %d",
-		c.Type(), c.Length(), c.StreamId(), c.Flags())
-	if c.Type() != TypeData && c.Type() != TypeGoAway {
-		s += fmt.Sprintf(" | BODY: %x", c.body()[:c.Length()])
+		f.Type(), f.Length(), f.StreamId(), f.Flags())
+	if f.Type() != TypeData && f.Type() != TypeGoAway {
+		s += fmt.Sprintf(" | BODY: %x", f.body()[:f.Length()])
 	}
 	s += "]"
 	return s

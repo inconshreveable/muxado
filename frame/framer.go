@@ -34,6 +34,7 @@ type framer struct {
 	Data
 	WndInc
 	GoAway
+	Unknown
 }
 
 func (fr *framer) WriteFrame(f Frame) error {
@@ -58,8 +59,8 @@ func (fr *framer) ReadFrame() (f Frame, err error) {
 		f = &fr.GoAway
 		fr.GoAway.common = fr.common
 	default:
-		// XXX: ignore unknown frame types instead
-		return nil, fmt.Errorf("Illegal frame type: 0x%x", fr.common.ftype)
+		f = &fr.Unknown
+		fr.Unknown.common = fr.common
 	}
 	return f, f.readFrom(fr)
 }
