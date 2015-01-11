@@ -152,7 +152,7 @@ func (s *session) Accept() (net.Conn, error) {
 }
 
 func (s *session) Close() error {
-	return s.die(nil)
+	return s.die(sessionClosed)
 }
 
 func (s *session) GoAway(errCode ErrorCode, debug []byte, dl time.Time) (err error) {
@@ -287,14 +287,13 @@ func (s *session) die(err error) error {
 		return sessionClosed
 	}
 
-	errorCode := NoError
-	debug := []byte("no error")
-	if err != nil {
-		errorCode, _ = GetError(err)
-		debug = []byte(err.Error())
-	}
-
 	// try to send a GOAWAY frame
+	errorCode, _ := GetError(err)
+	debug := []byte(err.Error())
+	if err == sessionClosed {
+		errorCode = NoError
+		debug = []byte("no error")
+	}
 	_ = s.GoAway(errorCode, debug, time.Now().Add(250*time.Millisecond))
 
 	// yay, we're dead
@@ -344,7 +343,7 @@ func (s *session) reader() {
 		if err != nil {
 			err = fromFrameError(err)
 			if err == io.EOF {
-				s.die(nil)
+				s.die(eofPeer)
 			} else {
 				s.die(err)
 			}
