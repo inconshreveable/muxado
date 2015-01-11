@@ -39,7 +39,3 @@ func (f *Rst) Pack(streamId StreamId, errorCode ErrorCode) (err error) {
 	order.PutUint32(f.body(), uint32(errorCode))
 	return
 }
-
-func NewRst() (f *Rst) {
-	return new(Rst)
-}

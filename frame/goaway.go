@@ -6,7 +6,8 @@ const goAwayFrameLength = 8
 
 type GoAway struct {
 	common
-	debug []byte
+	debugToWrite []byte
+	debugToRead  io.LimitedReader
 }
 
 func (f *GoAway) LastStreamId() StreamId {
@@ -17,8 +18,8 @@ func (f *GoAway) ErrorCode() ErrorCode {
 	return ErrorCode(order.Uint32(f.body()[4:]))
 }
 
-func (f *GoAway) Debug() []byte {
-	return f.debug
+func (f *GoAway) Debug() io.Reader {
+	return &f.debugToRead
 }
 
 func (f *GoAway) readFrom(rd io.Reader) error {
@@ -28,13 +29,11 @@ func (f *GoAway) readFrom(rd io.Reader) error {
 	if _, err := io.ReadFull(rd, f.body()[:goAwayFrameLength]); err != nil {
 		return err
 	}
-	f.debug = make([]byte, f.length-goAwayFrameLength)
-	if _, err := io.ReadFull(rd, f.debug); err != nil {
-		return err
-	}
 	if f.StreamId() != 0 {
 		return protoError("GOAWAY stream id must be zero, not: %d", f.StreamId())
 	}
+	f.debugToRead.R = rd
+	f.debugToRead.N = int64(f.Length())
 	return nil
 }
 
@@ -42,7 +41,7 @@ func (f *GoAway) writeTo(wr io.Writer) (err error) {
 	if err = f.common.writeTo(wr, goAwayFrameLength); err != nil {
 		return
 	}
-	if _, err = wr.Write(f.debug); err != nil {
+	if _, err = wr.Write(f.debugToWrite); err != nil {
 		return err
 	}
 	return
@@ -57,10 +56,6 @@ func (f *GoAway) Pack(lastStreamId StreamId, errCode ErrorCode, debug []byte) (e
 	}
 	order.PutUint32(f.body(), uint32(lastStreamId))
 	order.PutUint32(f.body()[4:], uint32(errCode))
-	f.debug = debug
+	f.debugToWrite = debug
 	return nil
-}
-
-func NewGoAway() (f *GoAway) {
-	return new(GoAway)
 }
