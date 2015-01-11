@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/inconshreveable/tlsutil"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -42,12 +44,28 @@ func BenchmarkPayload1MBStreams1(b *testing.B) {
 	testCase(b, 1024*1024, 1)
 }
 
-func BenchmarkPayload64MBStreams1(b *testing.B) {
-	testCase(b, 64*1024*1024, 1)
+func BenchmarkPayload32MBStreams1(b *testing.B) {
+	testCase(b, 32*1024*1024, 1)
+}
+
+func BenchmarkPayload1BStreams4(b *testing.B) {
+	testCase(b, 1, 4)
+}
+
+func BenchmarkPayload1KBStreams4(b *testing.B) {
+	testCase(b, 1024, 4)
+}
+
+func BenchmarkPayload1MBStreams4(b *testing.B) {
+	testCase(b, 1024*1024, 4)
+}
+
+func BenchmarkPayload32MBStreams4(b *testing.B) {
+	testCase(b, 32*1024*1024, 4)
 }
 
 func BenchmarkPayload1BStreams8(b *testing.B) {
-	testCase(b, 1024, 1)
+	testCase(b, 1, 8)
 }
 
 func BenchmarkPayload1KBStreams8(b *testing.B) {
@@ -58,8 +76,8 @@ func BenchmarkPayload1MBStreams8(b *testing.B) {
 	testCase(b, 1024*1024, 8)
 }
 
-func BenchmarkPayload64MBStreams8(b *testing.B) {
-	testCase(b, 64*1024*1024, 8)
+func BenchmarkPayload32MBStreams8(b *testing.B) {
+	testCase(b, 32*1024*1024, 8)
 }
 
 func BenchmarkPayload1BStreams64(b *testing.B) {
@@ -74,8 +92,12 @@ func BenchmarkPayload1MBStreams64(b *testing.B) {
 	testCase(b, 1024*1024, 64)
 }
 
-func BenchmarkPayload64MBStreams64(b *testing.B) {
-	testCase(b, 64*1024*1024, 64)
+func BenchmarkPayload32MBStreams64(b *testing.B) {
+	testCase(b, 32*1024*1024, 64)
+}
+
+func BenchmarkPayload1BStreams256(b *testing.B) {
+	testCase(b, 1, 256)
 }
 
 func BenchmarkPayload1KBStreams256(b *testing.B) {
@@ -86,13 +108,9 @@ func BenchmarkPayload1MBStreams256(b *testing.B) {
 	testCase(b, 1024*1024, 256)
 }
 
-func BenchmarkPayload64MBStreams256(b *testing.B) {
-	testCase(b, 64*1024*1024, 256)
-}
-
 func testCase(b *testing.B, payloadSize int64, concurrency int) {
 	done := make(chan int)
-	c, s := tcpTransport()
+	c, s := tlsTransport()
 	sessFactory := newMuxadoAdaptor
 	//sessFactory := newYamuxAdaptor
 	//sessFactory := newSSHAdaptor
@@ -181,11 +199,11 @@ func (a *alot) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func tcpTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {
+func tcpTransport() (net.Conn, net.Conn) {
 	l, port := listener()
 	defer l.Close()
-	c := make(chan io.ReadWriteCloser)
-	s := make(chan io.ReadWriteCloser)
+	c := make(chan net.Conn)
+	s := make(chan net.Conn)
 	go func() {
 		conn, err := l.Accept()
 		if err != nil {
@@ -201,6 +219,15 @@ func tcpTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {
 		c <- conn
 	}()
 	return <-c, <-s
+}
+
+func tlsTransport() (net.Conn, net.Conn) {
+	c, s := tcpTransport()
+	clientTLSConf, err := tlsutil.ClientConfigSnakeoil()
+	if err != nil {
+		panic(err)
+	}
+	return tls.Client(c, clientTLSConf), tls.Server(s, tlsutil.ServerConfigSnakeoil())
 }
 
 func listener() (net.Listener, int) {
@@ -248,7 +275,7 @@ func newMuxadoAdaptor(rwc io.ReadWriteCloser, isServer bool) muxSession {
 	if isServer {
 		newSess = Server
 	}
-	return &muxadoAdaptor{newSess(rwc)}
+	return &muxadoAdaptor{newSess(rwc, new(Config))}
 }
 
 type yamuxAdaptor struct {
@@ -350,3 +377,43 @@ func (c *rwcConn) RemoteAddr() net.Addr             { return nil }
 func (c *rwcConn) SetDeadline(time.Time) error      { return nil }
 func (c *rwcConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *rwcConn) SetWriteDeadline(time.Time) error { return nil }
+
+type tlsMode int
+
+const (
+	tlsModeClient tlsMode = iota
+	tlsModeServer
+	tlsModeNone
+)
+
+type tcpAdaptor struct {
+	l          net.Listener
+	remotePort string
+	doTLS      tlsMode
+	done       chan error
+}
+
+func (a *tcpAdaptor) OpenStream() (muxStream, error) {
+	conn, err := net.Dial("tcp", "127.0.0.1:"+a.remotePort)
+	if err != nil {
+		return nil, err
+	}
+	return a.wrapTLS(conn), nil
+}
+
+func (a *tcpAdaptor) AcceptStream() (muxStream, error) {
+	conn, err := a.l.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return a.wrapTLS(conn), nil
+}
+
+func (a *tcpAdaptor) wrapTLS(c net.Conn) net.Conn {
+	// XXX
+	return c
+}
+
+func (a *tcpAdaptor) Wait() (error, error, []byte) {
+	return <-a.done, nil, nil
+}

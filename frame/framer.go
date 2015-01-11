@@ -1,9 +1,10 @@
 package frame
 
 import (
-	"bytes"
 	"fmt"
 	"io"
+	"sync"
+	"text/tabwriter"
 )
 
 type Frame interface {
@@ -74,44 +75,51 @@ func NewFramer(r io.Reader, w io.Writer) Framer {
 }
 
 type debugFramer struct {
-	debugWr io.Writer
+	debugWr *tabwriter.Writer
+	once    sync.Once
+	name    string
 	Framer
 }
 
 func (fr *debugFramer) WriteFrame(f Frame) error {
-	// each frame knows how to write iteself to the framer
-	fmt.Fprintf(fr.debugWr, "Write frame: %s\n", f)
-
-	// print the serialized frame
-	var buf bytes.Buffer
-	f.writeTo(&buf)
-	body := buf.Bytes()[8:]
-	fmt.Fprintf(fr.debugWr, "Frame serialized: HEADER: %x\n", buf.Bytes()[:8])
-	nbody := len(body)
-	if nbody > 0 {
-		fmt.Fprintf(fr.debugWr, "BODY:\n")
-	}
-	for i := 0; i < nbody; i += 16 {
-		j := i + 16
-		if j > nbody {
-			j = nbody
-		}
-		fmt.Fprintf(fr.debugWr, "\t%x\n", body[i:j])
-	}
+	defer fr.debugWr.Flush()
+	fr.printHeader()
 
 	// actually write the frame to the real framer
-	return fr.Framer.WriteFrame(f)
+	err := fr.Framer.WriteFrame(f)
+
+	// each frame knows how to write iteself to the framer
+	fmt.Fprintf(fr.debugWr, "%s\t%s\t%s\t0x%x\t%d\t0x%x\t%v\n", fr.name, "WRITE", f.Type(), f.StreamId(), f.Length(), f.Flags(), err)
+	return err
 }
 
 func (fr *debugFramer) ReadFrame() (Frame, error) {
+	defer fr.debugWr.Flush()
+	fr.printHeader()
 	f, err := fr.Framer.ReadFrame()
-	fmt.Fprintf(fr.debugWr, "Read frame (err: %v): %s\n", err, f)
+	if err == nil {
+		fmt.Fprintf(fr.debugWr, "%s\t%s\t%s\t0x%x\t%d\t0x%x\t%v\n", fr.name, "READ", f.Type(), f.StreamId(), f.Length(), f.Flags(), nil)
+	} else {
+		fmt.Fprintf(fr.debugWr, "%s\t%s\t\t\t\t\t%v\n", fr.name, "READ", err)
+	}
 	return f, err
 }
 
+func (fr *debugFramer) printHeader() {
+	fr.once.Do(func() {
+		fmt.Fprintf(fr.debugWr, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", "NAME", "OP", "TYPE", "STREAMID", "LENGTH", "FLAGS", "ERROR")
+		fmt.Fprintf(fr.debugWr, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", "----", "--", "----", "--------", "------", "-----", "-----")
+	})
+}
+
 func NewDebugFramer(wr io.Writer, fr Framer) Framer {
+	return NewNamedDebugFramer("", wr, fr)
+}
+
+func NewNamedDebugFramer(name string, wr io.Writer, fr Framer) Framer {
 	return &debugFramer{
 		Framer:  fr,
-		debugWr: wr,
+		debugWr: tabwriter.NewWriter(wr, 12, 2, 2, ' ', 0),
+		name:    name,
 	}
 }

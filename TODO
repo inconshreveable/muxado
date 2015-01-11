@@ -6,7 +6,6 @@ Use buffered io? Optionally? When would you flush?
 Move high throughput connections to their own connections
 Use a ring buffer?
 Mitigate allocation of windowupdates (pool?)
-Add Config to control window size, accept queue depth (stream factory?), framer and more
 
 DOCS:
 Doc heartbeat and TypedStreamSession
@@ -22,10 +21,9 @@ test for short read of data frame
 tests for window manager
 tests for buffer
 re-enable stream tests
-re-enable frame tests
 More session tests
 More stream tests
-Write frame/framer tests - verify read correct type, verify unknown type causes error, verify proper errors
+frame/framer tests - return proper error types, hand unknown type frames
 
 ### Low priority:
 accept could select{} on the .dead channel as well

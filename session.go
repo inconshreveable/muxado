@@ -42,14 +42,13 @@ type session struct {
 	local   halfState // client state
 	remote  halfState // server state
 
-	transport         io.ReadWriteCloser // multiplexing over this transport stream
-	framer            frame.Framer       // framer
-	streams           *streamMap         // all active streams
-	accept            chan streamPrivate // new streams opened by the remote
-	defaultWindowSize uint32             // window size when creating new streams
-	newStream         streamFactory      // factory function to make new streams
-	isLocal           parityFn           // determines if a stream id is local or remote
-	writeFrames       chan writeReq      // write requests for the framer
+	config      Config             // session configuration
+	transport   io.ReadWriteCloser // multiplexing over this transport stream
+	framer      frame.Framer       // framer
+	streams     *streamMap         // all active streams
+	accept      chan streamPrivate // new streams opened by the remote
+	isLocal     parityFn           // determines if a stream id is local or remote
+	writeFrames chan writeReq      // write requests for the framer
 
 	dead   chan struct{} // closed when dead
 	dieErr error         // the first error that caused session termination
@@ -60,25 +59,28 @@ type session struct {
 }
 
 // Client returns a new muxado client-side connection using trans as the transport.
-func Client(trans io.ReadWriteCloser) Session {
-	return newSession(trans, newStream, true)
+func Client(trans io.ReadWriteCloser, config *Config) Session {
+	return newSession(trans, config, true)
 }
 
 // Server returns a muxado server session using trans as the transport.
-func Server(trans io.ReadWriteCloser) Session {
-	return newSession(trans, newStream, false)
+func Server(trans io.ReadWriteCloser, config *Config) Session {
+	return newSession(trans, config, false)
 }
 
-func newSession(transport io.ReadWriteCloser, newStream streamFactory, isClient bool) Session {
+func newSession(transport io.ReadWriteCloser, config *Config, isClient bool) Session {
+	if config == nil {
+		config = &zeroConfig
+	}
+	config.initDefaults()
 	sess := &session{
-		transport:         transport,
-		framer:            frame.NewFramer(transport, transport),
-		streams:           newStreamMap(),
-		accept:            make(chan streamPrivate, defaultAcceptQueueDepth),
-		defaultWindowSize: defaultWindowSize,
-		newStream:         newStream,
-		writeFrames:       make(chan writeReq, 64),
-		dead:              make(chan struct{}),
+		transport:   transport,
+		framer:      config.NewFramer(transport, transport),
+		streams:     newStreamMap(),
+		accept:      make(chan streamPrivate, config.AcceptBacklog),
+		writeFrames: make(chan writeReq, config.writeFrameQueueDepth),
+		dead:        make(chan struct{}),
+		config:      *config,
 	}
 	if isClient {
 		sess.isLocal = sess.isClient
@@ -121,24 +123,28 @@ func (s *session) OpenStream() (Stream, error) {
 	}
 
 	// make the stream and add it to the stream map
-	str := s.newStream(s, nextId, s.defaultWindowSize, false, true)
+	str := s.config.newStream(s, nextId, s.config.MaxWindowSize, false, true)
 	s.streams.Set(nextId, str)
 
 	return str, nil
 }
 
-func (s *session) AcceptStream() (str Stream, err error) {
-	str, ok := <-s.accept
-	if !ok {
-		err, _, _ = s.Wait()
-		if err == nil {
-			err = fmt.Errorf("session closed by remote peer")
+func (s *session) AcceptStream() (Stream, error) {
+	select {
+	case str, ok := <-s.accept:
+		if ok {
+			return str, nil
 		} else {
-			err = fmt.Errorf("session closed with error: %v", err)
+			<-s.dead
 		}
-		return nil, err
+	case <-s.dead:
 	}
-	return str, nil
+
+	if s.dieErr == nil {
+		return nil, &muxadoError{NoError, nil}
+	} else {
+		return nil, s.dieErr
+	}
 }
 
 func (s *session) Accept() (net.Conn, error) {
@@ -476,7 +482,7 @@ func (s *session) handleSyn(f *frame.Data) (err error) {
 	atomic.StoreUint32(&s.remote.lastId, uint32(f.StreamId()))
 
 	// make the new stream
-	str := s.newStream(s, f.StreamId(), s.defaultWindowSize, f.Fin(), false)
+	str := s.config.newStream(s, f.StreamId(), s.config.MaxWindowSize, f.Fin(), false)
 
 	// add it to the stream map
 	s.streams.Set(f.StreamId(), str)

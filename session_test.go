@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -59,14 +60,18 @@ func newFakeConnPair() (local *fakeConn, remote *fakeConn) {
 	return
 }
 
+var debugFramer = func(name string) func(io.Reader, io.Writer) frame.Framer {
+	return func(rd io.Reader, wr io.Writer) frame.Framer {
+		return frame.NewNamedDebugFramer(name, os.Stdout, frame.NewFramer(rd, wr))
+	}
+}
+
 func TestWrongClientParity(t *testing.T) {
 	t.Parallel()
 	local, remote := newFakeConnPair()
 	// don't need the remote output
 	remote.Discard()
-
-	// false for a server session
-	s := newSession(local, newFakeStream, false)
+	s := Server(local, &Config{newStream: newFakeStream})
 
 	// 300 is even, and only servers send even stream ids
 	f := new(frame.Data)
@@ -92,9 +97,7 @@ func TestWrongServerParity(t *testing.T) {
 	t.Parallel()
 
 	local, remote := newFakeConnPair()
-
-	// true for a client session
-	s := newSession(local, newFakeStream, true)
+	s := Client(local, &Config{newStream: newFakeStream})
 
 	// don't need the remote output
 	remote.Discard()
@@ -127,8 +130,7 @@ func TestAcceptStream(t *testing.T) {
 	// don't need the remote output
 	remote.Discard()
 
-	// true for a client session
-	s := newSession(local, newFakeStream, true)
+	s := Client(local, &Config{newStream: newFakeStream})
 	defer s.Close()
 
 	f := new(frame.Data)
@@ -164,7 +166,11 @@ func TestAcceptStream(t *testing.T) {
 
 // validate that a session fulfills the net.Listener interface
 // compile-only check
-var _ net.Listener = Server(new(fakeConn))
+func TestNetListener(t *testing.T) {
+	if false {
+		var _ net.Listener = Server(nil, nil)
+	}
+}
 
 // Test for the Close() behavior
 // Close() issues a data frame with the fin flag
@@ -172,8 +178,8 @@ var _ net.Listener = Server(new(fakeConn))
 func TestWriteAfterClose(t *testing.T) {
 	t.Parallel()
 	local, remote := newFakeConnPair()
-	sLocal := newSession(local, newStream, false)
-	sRemote := newSession(remote, newStream, true)
+	sLocal := Server(local, &Config{NewFramer: debugFramer("SERVER")})
+	sRemote := Client(remote, &Config{NewFramer: debugFramer("CLIENT")})
 
 	closed := make(chan int)
 	go func() {
