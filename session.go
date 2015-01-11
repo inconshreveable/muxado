@@ -12,11 +12,6 @@ import (
 	"github.com/inconshreveable/muxado/frame"
 )
 
-const (
-	defaultWindowSize       = 0x10000 // 64KB
-	defaultAcceptQueueDepth = 128
-)
-
 // private interface for Sessions to call Streams
 type streamPrivate interface {
 	Stream
@@ -157,7 +152,7 @@ func (s *session) Close() error {
 func (s *session) GoAway(errCode ErrorCode, debug []byte, dl time.Time) (err error) {
 	// mark that we've told the client to go away
 	atomic.StoreUint32(&s.local.goneAway, 1)
-	f := frame.NewGoAway()
+	f := new(frame.GoAway)
 	remoteId := frame.StreamId(atomic.LoadUint32(&s.remote.lastId))
 	if err := f.Pack(remoteId, frame.ErrorCode(errCode), debug); err != nil {
 		return fromFrameError(err)
@@ -395,16 +390,12 @@ func (s *session) handleFrame(rf frame.Frame) error {
 			// if we get a data frame on a non-existent connection, we still
 			// need to read out the frame body so that the stream stays in a
 			// good state.
-			n, err := io.Copy(ioutil.Discard, f.Reader())
-			switch {
-			case err != nil:
+			if _, err := io.CopyN(ioutil.Discard, f.Reader(), int64(f.Length())); err != nil {
 				return err
-			case uint32(n) < f.Length():
-				return io.ErrUnexpectedEOF
 			}
 
 			// DATA frames on closed connections are just stream-level errors
-			fRst := frame.NewRst()
+			fRst := new(frame.Rst)
 			if err := fRst.Pack(f.StreamId(), frame.ErrorCode(StreamClosed)); err != nil {
 				return newErr(InternalError, fmt.Errorf("failed to pack data on closed stream RST: %v", err))
 			}
@@ -426,9 +417,24 @@ func (s *session) handleFrame(rf frame.Frame) error {
 
 	case *frame.GoAway:
 		atomic.StoreUint32(&s.remote.goneAway, 1)
+
+		// read out at most 1 MB of debug output
+		r := io.LimitedReader{R: f.Debug(), N: 0x100000}
+		debug, err := ioutil.ReadAll(&r)
+		if err != nil {
+			return err
+		}
+
+		// discard remaining debug output
+		if _, err = io.Copy(ioutil.Discard, &r); err != nil {
+			return err
+		}
+
 		// XXX: this races with shutdown
-		s.remoteDebug = f.Debug()
-		s.remoteError = &muxadoError{ErrorCode(f.ErrorCode()), errors.New(string(f.Debug()))}
+		s.remoteDebug = debug
+		s.remoteError = &muxadoError{ErrorCode(f.ErrorCode()), errors.New(string(debug))}
+
+		// close streams unhandled by the remote side
 		lastId := f.LastStreamId()
 		s.streams.Each(func(id frame.StreamId, str streamPrivate) {
 			// close all streams that we opened above the last handled id
@@ -438,8 +444,14 @@ func (s *session) handleFrame(rf frame.Frame) error {
 			}
 		})
 
+	case *frame.Unknown:
+		// unknown frame types ignored
+		if _, err := io.CopyN(ioutil.Discard, f.PayloadReader(), int64(f.Length())); err != nil {
+			return err
+		}
+
 	default:
-		// unkown frame types ignored
+		panic("unhandled frame type")
 	}
 	return nil
 }
@@ -447,7 +459,7 @@ func (s *session) handleFrame(rf frame.Frame) error {
 func (s *session) handleSyn(f *frame.Data) (err error) {
 	// if we're going away, refuse new streams
 	if atomic.LoadUint32(&s.local.goneAway) == 1 {
-		rstF := frame.NewRst()
+		rstF := new(frame.Rst)
 		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(StreamRefused)); err != nil {
 			return newErr(InternalError, fmt.Errorf("failed to pack stream refused RST: %v", err))
 		}
@@ -491,7 +503,7 @@ RETRY:
 			goto RETRY
 		}
 		// accept queue is full
-		rstF := frame.NewRst()
+		rstF := new(frame.Rst)
 		if err := rstF.Pack(f.StreamId(), frame.ErrorCode(AcceptQueueFull)); err != nil {
 			return newErr(InternalError, fmt.Errorf("failed to pack accept overflow RST: %v", err))
 		}

@@ -34,6 +34,7 @@ func (r *rstTest) Eq(f Frame) error {
 }
 
 func TestValidRstFrames(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &rstTest{
 		streamId:         0x49a1bb00,
 		errorCode:        0x5,
@@ -51,6 +52,7 @@ func TestValidRstFrames(t *testing.T) {
 }
 
 func TestBadRstFrameLength(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &rstTest{
 		streamId:         0x49a1bb00,
 		errorCode:        0x0,
@@ -61,6 +63,7 @@ func TestBadRstFrameLength(t *testing.T) {
 }
 
 func TestRstZeroStream(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &rstTest{
 		streamId:         0x0,
 		errorCode:        0x1,
@@ -71,6 +74,7 @@ func TestRstZeroStream(t *testing.T) {
 }
 
 func TestRstShortPayload(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &rstTest{
 		streamId:         0x49a1bb00,
 		errorCode:        0x0,

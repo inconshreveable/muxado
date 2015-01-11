@@ -203,6 +203,15 @@ func tcpTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {
 	return <-c, <-s
 }
 
+func listener() (net.Listener, int) {
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		panic(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	return l, port
+}
+
 type duplexPipe struct {
 	*io.PipeReader
 	*io.PipeWriter
@@ -220,15 +229,6 @@ func memTransport() (io.ReadWriteCloser, io.ReadWriteCloser) {
 	client := &duplexPipe{rd1, wr2}
 	server := &duplexPipe{rd2, wr1}
 	return client, server
-}
-
-func listener() (net.Listener, int) {
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		panic(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	return l, port
 }
 
 type muxadoAdaptor struct {

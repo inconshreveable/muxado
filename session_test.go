@@ -162,82 +162,9 @@ func TestAcceptStream(t *testing.T) {
 	}
 }
 
-/*
-func TestSynLowId(t *testing.T) {
-	t.Parallel()
-
-	local, remote := newFakeConnPair()
-
-	// don't need the remote output
-	remote.Discard()
-
-	// true for a client session
-	s := newSession(local, newFakeStream, true)
-
-	// Start a stream
-	f := frame.NewData()
-	f.Pack(302, []byte{}, false, true)
-
-	// send the frame into the session
-	fr := frame.NewFramer(remote, remote)
-	fr.WriteFrame(f)
-
-	// accept it
-	s.Accept()
-
-	// Start a closed stream at a lower id number
-	f.Pack(300, []byte{}, false, true)
-
-	// send the frame into the session
-	fr.WriteFrame(f)
-
-	err, _, _ := s.Wait()
-	if code, _ := GetError(err); code != ProtocolError {
-		t.Errorf("Session not terminated with protocol error, got %d expected %d. Error: %v", code, ProtocolError, err)
-	}
-}
-*/
-
-// Check that sending a frame of the wrong size responds with FRAME_SIZE_ERROR
-func TestFrameSizeError(t *testing.T) {
-}
-
-// Check that we get a protocol error for sending STREAM_DATA on a stream id that was never opened
-func TestDataOnClosed(t *testing.T) {
-}
-
-// Check that we get nothing for sending STREAM_WND_INC on a stream id that was never opened
-func TestWndIncOnClosed(t *testing.T) {
-}
-
-// Check that we get nothing for sending STREAM_RST on a stream id that was never opened
-func TestRstOnClosed(t *testing.T) {
-}
-
-func TestGoAway(t *testing.T) {
-}
-
-func TestCloseGoAway(t *testing.T) {
-}
-
-func TestKill(t *testing.T) {
-}
-
-// make sure we get a valid syn frame from opening a new stream
-func TestOpen(t *testing.T) {
-}
-
-// test opening a new stream that is immediately half-closed
-func TestOpenWithFin(t *testing.T) {
-}
-
 // validate that a session fulfills the net.Listener interface
 // compile-only check
-func TestListener(t *testing.T) {
-	if false {
-		var _ net.Listener = newSession(new(fakeConn), newFakeStream, false)
-	}
-}
+var _ net.Listener = Server(new(fakeConn))
 
 // Test for the Close() behavior
 // Close() issues a data frame with the fin flag

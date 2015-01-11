@@ -86,13 +86,16 @@ func (s *stream) Read(buf []byte) (int, error) {
 	// read from the buffer
 	n, err := s.buf.Read(buf)
 	if n > 0 {
-		maxWinSize := s.windowSize
-		recvWindow := atomic.AddUint32(&s.recvWindow, ^uint32(n-1))
-		if recvWindow < maxWinSize/2 {
-			if atomic.CompareAndSwapUint32(&s.recvWindow, recvWindow, maxWinSize) {
-				s.sendWindowUpdate(maxWinSize - recvWindow)
+		/*
+			maxWinSize := s.windowSize
+			recvWindow := atomic.AddUint32(&s.recvWindow, ^uint32(n-1))
+			if recvWindow < maxWinSize/2 {
+				if atomic.CompareAndSwapUint32(&s.recvWindow, recvWindow, maxWinSize) {
+					s.sendWindowUpdate(maxWinSize - recvWindow)
+				}
 			}
-		}
+		*/
+		s.sendWindowUpdate(uint32(n))
 	}
 	return n, err
 }
@@ -230,7 +233,7 @@ func (s *stream) resetWith(errorCode ErrorCode, resetErr error) {
 		s.closeWithAndRemoveLater(resetErr)
 
 		// make the reset frame
-		rst := frame.NewRst()
+		rst := new(frame.Rst)
 		if err := rst.Pack(s.id, frame.ErrorCode(errorCode)); err != nil {
 			s.session.die(newErr(InternalError, fmt.Errorf("failed to pack RST frame: %v", err)))
 			return

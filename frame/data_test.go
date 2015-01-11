@@ -43,6 +43,7 @@ func (dt *dataTest) Eq(fr Frame) error {
 }
 
 func TestDataFrameValid(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &dataTest{
 		streamId:       0x49a1bb00,
 		data:           []byte{0x00, 0x01, 0x02, 0x03, 0x04},
@@ -53,6 +54,7 @@ func TestDataFrameValid(t *testing.T) {
 }
 
 func TestDataFrameFin(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &dataTest{
 		streamId:       streamMask,
 		data:           []byte{0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00},
@@ -63,6 +65,7 @@ func TestDataFrameFin(t *testing.T) {
 }
 
 func TestDataFrameZeroLength(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &dataTest{
 		streamId:       0x1,
 		data:           []byte{},
@@ -73,6 +76,7 @@ func TestDataFrameZeroLength(t *testing.T) {
 }
 
 func TestDataFrameTooLong(t *testing.T) {
+	t.Parallel()
 	RunFrameTest(t, &dataTest{
 		streamId:       0x0,
 		data:           make([]byte, lengthMask+1),
