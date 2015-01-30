@@ -219,8 +219,8 @@ func TestWriteAfterClose(t *testing.T) {
 	closed <- 1
 
 	err, remoteErr, debug := sLocal.Wait()
-	if err != nil {
-		t.Fatalf("session closed with error: %v, expected nil", err)
+	if code, _ := GetError(err); code != PeerEOF {
+		t.Fatalf("session closed with error: %v, expected PeerEOF", err)
 	}
 	remoteCode, _ := GetError(remoteErr)
 	if remoteCode != NoError {
