@@ -1,9 +1,7 @@
-API:
-Fix errors returned by Accept() to be muxadoError
+replace or publish tlsutil
 
 PERF:
-Use buffered io? Optionally? When would you flush?
-Move high throughput connections to their own connections
+Investigate use of buffered io? Optionally? When would you flush?
 Use a ring buffer?
 Mitigate allocation of windowupdates (pool?)
 
@@ -26,7 +24,7 @@ More stream tests
 frame/framer tests - return proper error types, hand unknown type frames
 
 ### Low priority:
-accept could select{} on the .dead channel as well
+extension: Move high throughput connections to their own connections
 window_manager needs to support a deadline
 inboundbuffer deadline support
 add Reset() stream API?
