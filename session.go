@@ -322,7 +322,11 @@ func (s *session) writer() {
 		case req := <-s.writeFrames:
 			err := fromFrameError(s.framer.WriteFrame(req.f))
 			if req.err != nil {
-				req.err <- err
+				select {
+				case req.err <- err:
+				case <-s.dead:
+					return
+				}
 			}
 			if err != nil {
 				// any write error kills the session
