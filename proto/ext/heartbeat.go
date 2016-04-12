@@ -8,8 +8,8 @@ package ext
 
 import (
 	"encoding/binary"
-	proto "github.com/inconshreveable/muxado/proto"
-	"github.com/inconshreveable/muxado/proto/frame"
+	proto "github.com/NebulousLabs/muxado/proto"
+	"github.com/NebulousLabs/muxado/proto/frame"
 	"io"
 	"time"
 )
