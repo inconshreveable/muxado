@@ -1,8 +1,8 @@
 package muxado
 
 import (
-	"github.com/inconshreveable/muxado/proto"
-	"github.com/inconshreveable/muxado/proto/frame"
+	"github.com/NebulousLabs/muxado/proto"
+	"github.com/NebulousLabs/muxado/proto/frame"
 )
 
 // streamAdaptor recasts the types of some function calls by the proto/Stream implementation

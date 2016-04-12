@@ -1,7 +1,7 @@
 package ext
 
 import (
-	"github.com/inconshreveable/muxado/proto"
+	"github.com/NebulousLabs/muxado/proto"
 )
 
 const (

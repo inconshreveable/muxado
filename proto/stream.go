@@ -2,8 +2,8 @@ package proto
 
 import (
 	"fmt"
-	"github.com/inconshreveable/muxado/proto/buffer"
-	"github.com/inconshreveable/muxado/proto/frame"
+	"github.com/NebulousLabs/muxado/proto/buffer"
+	"github.com/NebulousLabs/muxado/proto/frame"
 	"io"
 	"net"
 	"sync"
