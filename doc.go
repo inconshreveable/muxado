@@ -1,57 +1,60 @@
-// muxado is an implementation of a general-purpose stream-multiplexing protocol.
+// muxado implements a general purpose stream-multiplexing protocol. muxado allows clients applications
+// to multiplex any io.ReadWriteCloser (like a net.Conn) into multiple, independent full-duplex streams.
 //
-// muxado allows clients applications to multiplex a single stream-oriented connection,
-// like a TCP connection, and communicate over many streams on top of it. muxado accomplishes
-// this by chunking data sent over each stream into frames and then reassembling the
-// frames and buffering the data before being passed up to the application
-// layer on the other side.
+// muxado is a useful protocol for any two communicating processes. It is an excellent base protocol
+// for implementing lightweight RPC. It eliminates the need for custom async/pipeling code from your peers
+// in order to support multiple simultaneous inflight requests between peers. For the same reason, it also
+// eliminates the need to build connection pools for your clients. It enables servers to initiate streams
+// to clients without building any NAT traversal. muxado can also yield performance improvements (especially
+// latency) for protocols that require rapidly opening many concurrent connections.
 //
-// muxado is very nearly an exact implementation of the HTTP2 framing layer while leaving out all
-// the HTTP-specific parts. It is heavily inspired by HTTP2/SPDY/WebMUX.
+// Here's an example client which responds to simple JSON requests from a server.
 //
-// muxado's documentation uses the following terms consistently for easier communication:
-// - "a transport" is an underlying stream (typically TCP) over which frames are sent between
-// endpoints
-// - "a stream" is any of the full-duplex byte-streams multiplexed over the transport
-// - "a session" refers to an instance of the muxado protocol running over a transport between
-// two endpoints
+//     conn, _ := net.Dial("tcp", "example.net:1234")
+//     sess := muxado.Client(conn)
+//     for {
+//         stream, _ := sess.Accept()
+//         go func(str net.Conn) {
+//             defer str.Close()
+//             var req Request
+//             json.NewDecoder(str).Decode(&req)
+//             response := handleRequest(&req)
+//             json.NewEncoder(str).Encode(response)
+//         }(stream)
+//     }
 //
-// Perhaps the best part of muxado is the interface exposed to client libraries. Since new
-// streams may be initiated by both sides at any time, a muxado.Session implements the net.Listener
-// interface (almost! Go unfortunately doesn't support covariant interface satisfaction so there's
-// a shim). Each muxado stream implements the net.Conn interface. This allows you to integrate
-// muxado into existing code which works with these interfaces (which is most Golang networking code)
-// with very little difficulty. Consider the following toy example. Here we'll initiate a new secure
-// connection to a server, and then ask it which application it wants via an HTTP request over a muxado stream
-// and then serve an entire HTTP application *to the server*.
+// Maybe the client wants to make a request to the server instead of just responding. This is easy as well:
 //
+//     stream, _ := sess.Open()
+//     req := Request{
+//         Query: "What is the meaning of life, the universe and everything?",
+//     }
+//     json.NewEncoder(stream).Encode(&req)
+//     var resp Response
+//     json.dec.Decode(&resp)
+//     if resp.Answer != "42" {
+//         panic("wrong answer to the ultimate question!")
+//     }
 //
-// 	sess, err := muxado.DialTLS("tcp", "example.com:1234", new(tls.Config))
-// 	client := &http.Client{Transport: &http.Transport{Dial: sess.NetDial}}
-// 	resp, err := client.Get("http://example.com/appchoice")
-// 	switch getChoice(resp.Body) {
-// 	case "foo":
-// 		http.Serve(sess.NetListener(), fooHandler)
-// 	case "bar":
-//		http.Serve(sess.NetListener(), barHandler)
-// 	}
+// muxado defines the following terms for clarity of the documentation:
 //
+// A "Transport" is an underlying stream (typically TCP) that is multiplexed by sending frames between muxado peers over this transport.
 //
-// In addition to enabling multiple streams over a single connection, muxado enables other
-// behaviors which can be useful to the application layer:
-// - Both sides of a muxado session may initiate new streams
-// - muxado can transparently run application-level heartbeats and timeout dead sessions
-// - When connections fail, muxado indicates to the application which streams may be safely retried
-// - muxado supports prioritizing streams to maximize useful throughput when bandwidth-constrained
+// A "Stream" is any of the full-duplex byte-streams multiplexed over the transport
 //
-// A few examples of what these capabilities might make muxado useful for:
-// - eliminating custom async/pipeling code for your protocols
-// - eliminating connection pools in your protocols
-// - eliminating custom NAT traversal logic for enabling server-initiated streams
+// A "Session" is two peers running the muxado protocol over a single transport
 //
-// muxado has been tuned to be very performant within the limits of what you can expect of pure-Go code.
-// Some of muxado's code looks unidiomatic in the quest for better performance. (Locks over channels, never allocating
-// from the heap, etc). muxado will typically outperform TCP connections when rapidly initiating many new
-// streams with small payloads. When sending a large payload over a single stream, muxado's worst case, it can
-// be 2-3x slower and does not parallelize well.
+// muxado's design is influenced heavily by the framing layer of HTTP2 and SPDY. However, instead
+// of being specialized for a higher-level protocol, muxado is designed in a protocol agnostic way
+// with simplicity and speed in mind. More advanced features are left to higher-level libraries and protocols.
+//
+// muxado's API is designed to make it seamless to integrate into existing Go programs. muxado.Session
+// implements the net.Listener interface and muxado.Stream implements net.Conn.
+//
+// muxado ships with two wrappers that add commonly used functionality. The first is a TypedStreamSession
+// which allows a client application to open streams with a type identifier so that the remote peer
+// can identify the protocol that will be communicated on that stream.
+//
+// The second wrapper is a simple Heartbeat which issues a callback to the application informing it
+// of round-trip latency and heartbeat failure.
 package muxado

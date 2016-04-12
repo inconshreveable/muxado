@@ -1,80 +1,65 @@
-package proto
+package muxado
 
 import (
-	"fmt"
-	"github.com/inconshreveable/muxado/proto/frame"
 	"io"
 	"io/ioutil"
 	"testing"
-	"time"
+
+	"github.com/inconshreveable/muxado/frame"
 )
 
-func TestSendHalfCloseWithZeroWindow(t *testing.T) {
+func TestCloseWrite(t *testing.T) {
 	t.Parallel()
 
 	local, remote := newFakeConnPair()
 
-	s := NewSession(local, NewStream, false, []Extension{})
-	s.(*Session).defaultWindowSize = 10
+	s := Client(local, &Config{NewFramer: debugFramer("CLIENT")})
 
+	done := make(chan int)
 	go func() {
-		trans := frame.NewBasicTransport(remote)
-		f, err := trans.ReadFrame()
-		if err != nil {
-			t.Errorf("Failed to read next frame: %v", err)
-			return
+		fr := debugFramer("SERVER")(remote, remote)
+		readFrame := func(ftype frame.Type) frame.Frame {
+			f, err := fr.ReadFrame()
+			if err != nil {
+				t.Errorf("Failed to read next frame: %v", err)
+				return nil
+			}
+			if f.Type() != ftype {
+				t.Errorf("Wrong frame type. Got %v, expected %v", f.Type(), ftype)
+				return nil
+			}
+			return f
 		}
 
-		_, ok := f.(*frame.RStreamSyn)
-		if !ok {
-			t.Errorf("Wrong frame type. Got %v, expected %v", f.Type(), frame.TypeStreamSyn)
+		f := readFrame(frame.TypeData)
+		if f.Length() != 10 {
+			t.Errorf("Wrong data length. Got %d, expected %d", f.Length(), 10)
 			return
 		}
-
-		f, err = trans.ReadFrame()
-		if err != nil {
-			t.Errorf("Failed to read next frame: %v", err)
-			return
-		}
-
-		fr, ok := f.(*frame.RStreamData)
-		if !ok {
-			t.Errorf("Wrong frame type. Got %v, expected %v", f.Type(), frame.TypeStreamData)
-			return
-		}
-
-		if fr.Length() != 10 {
-			t.Errorf("Wrong data length. Got %v, expected %d", fr.Length(), 10)
-			return
-		}
-
-		n, err := io.CopyN(ioutil.Discard, fr.Reader(), 10)
+		n, _ := io.Copy(ioutil.Discard, f.(*frame.Data).Reader())
 		if n != 10 {
 			t.Errorf("Wrong read size. Got %d, expected %d", n, 10)
 			return
 		}
 
-		f, err = trans.ReadFrame()
-		if err != nil {
-			t.Errorf("Failed to read next frame: %v", err)
+		f = readFrame(frame.TypeData)
+		if f.Length() != 0 {
+			t.Errorf("Wrong data length. Got %d, expected %d", f.Length(), 0)
+			return
+		}
+		if !f.(*frame.Data).Fin() {
+			t.Errorf("Expected fin flag on final data frame.")
 			return
 		}
 
-		fr, ok = f.(*frame.RStreamData)
-		if !ok {
-			t.Errorf("Wrong frame type. Got %v, expected %v", f.Type(), frame.TypeStreamData)
-			return
-		}
+		// io.Pipe is weird and apparently sometimes doesn't acknowledge a write completion
+		// until the next read
+		remote.Read([]byte{})
 
-		if !fr.Fin() {
-			t.Errorf("Wrong frame flags. Expected fin flag to be set.")
-			return
-		}
-
-		trans.ReadFrame()
+		close(done)
 	}()
 
-	str, err := s.Open()
+	str, err := s.OpenStream()
 	if err != nil {
 		t.Fatalf("Failed to open stream: %v", err)
 	}
@@ -84,12 +69,15 @@ func TestSendHalfCloseWithZeroWindow(t *testing.T) {
 		t.Fatalf("Failed to write data: %v", err)
 	}
 
-	_, err = str.HalfClose([]byte{})
+	err = str.CloseWrite()
 	if err != nil {
-		t.Fatalf("Failed to half-close with an empty buffer")
+		t.Fatalf("Failed to close write")
 	}
+
+	<-done
 }
 
+/*
 func TestDataAfterRst(t *testing.T) {
 	local, remote := newFakeConnPair()
 
@@ -281,3 +269,4 @@ func TestRemoveAfterHalfClose(t *testing.T) {
 // Test that we get a RST if we send a DATA frame after we send a DATA frame with a FIN
 func TestDataAfterFin(t *testing.T) {
 }
+*/
