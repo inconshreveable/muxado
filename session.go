@@ -70,9 +70,10 @@ func Server(trans io.ReadWriteCloser, config *Config) Session {
 
 func newSession(transport io.ReadWriteCloser, config *Config, isClient bool) Session {
 	if config == nil {
-		config = &zeroConfig
+		config = &defaultConfig
+	} else {
+		config.initDefaults()
 	}
-	config.initDefaults()
 	sess := &session{
 		transport:   transport,
 		framer:      config.NewFramer(transport, transport),
