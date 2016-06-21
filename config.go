@@ -6,7 +6,13 @@ import (
 	"github.com/inconshreveable/muxado/frame"
 )
 
-var zeroConfig Config
+var defaultConfig = Config{
+	MaxWindowSize:        0x40000, // 256KB
+	AcceptBacklog:        128,
+	NewFramer:            frame.NewFramer,
+	newStream:            newStream,
+	writeFrameQueueDepth: 64,
+}
 
 type Config struct {
 	// Maximum size of unread data to receive and buffer (per-stream). Default 256KB.
@@ -25,18 +31,18 @@ type Config struct {
 
 func (c *Config) initDefaults() {
 	if c.MaxWindowSize == 0 {
-		c.MaxWindowSize = 0x40000 // 256KB
+		c.MaxWindowSize = defaultConfig.MaxWindowSize
 	}
 	if c.AcceptBacklog == 0 {
-		c.AcceptBacklog = 128
+		c.AcceptBacklog = defaultConfig.AcceptBacklog
 	}
 	if c.NewFramer == nil {
-		c.NewFramer = frame.NewFramer
+		c.NewFramer = defaultConfig.NewFramer
 	}
 	if c.newStream == nil {
-		c.newStream = newStream
+		c.newStream = defaultConfig.newStream
 	}
 	if c.writeFrameQueueDepth == 0 {
-		c.writeFrameQueueDepth = 64
+		c.writeFrameQueueDepth = defaultConfig.writeFrameQueueDepth
 	}
 }
