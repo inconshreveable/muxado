@@ -5,17 +5,19 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/big"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/yamux"
-	"github.com/inconshreveable/tlsutil"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -223,11 +225,63 @@ func tcpTransport() (net.Conn, net.Conn) {
 
 func tlsTransport() (net.Conn, net.Conn) {
 	c, s := tcpTransport()
-	clientTLSConf, err := tlsutil.ClientConfigSnakeoil()
+
+	_, ca, err := genCert("Snakeoil CA", nil)
 	if err != nil {
 		panic(err)
 	}
-	return tls.Client(c, clientTLSConf), tls.Server(s, tlsutil.ServerConfigSnakeoil())
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+
+	clientTLSConf := &tls.Config{RootCAs: roots}
+	if err != nil {
+		panic(err)
+	}
+
+	serverCert, _, err := genCert("snakeoil.dev", ca)
+	if err != nil {
+		panic(err)
+	}
+	return tls.Client(c, clientTLSConf), tls.Server(s, &tls.Config{Certificates: []tls.Certificate{*serverCert}})
+}
+
+func genCert(cn string, parent *x509.Certificate) (*tls.Certificate, *x509.Certificate, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, nil, err
+	}
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: cn,
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment,
+		BasicConstraintsValid: true,
+		DNSNames:              []string{cn},
+	}
+	if parent == nil {
+		parent = &template
+	}
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, parent, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	x509Certs, err := x509.ParseCertificates(certBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &tls.Certificate{
+		Certificate: [][]byte{certBytes},
+		PrivateKey:  key,
+	}, x509Certs[0], nil
 }
 
 func listener() (net.Listener, int) {
