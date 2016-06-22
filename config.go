@@ -2,6 +2,7 @@ package muxado
 
 import (
 	"io"
+	"sync"
 
 	"github.com/inconshreveable/muxado/frame"
 )
@@ -16,6 +17,9 @@ type Config struct {
 	// Function creating the Session's framer. Deafult frame.NewFramer()
 	NewFramer func(io.Reader, io.Writer) frame.Framer
 
+	// allow safe concurrent initialization
+	initOnce sync.Once
+
 	// Function to create new streams
 	newStream streamFactory
 
@@ -24,19 +28,21 @@ type Config struct {
 }
 
 func (c *Config) initDefaults() {
-	if c.MaxWindowSize == 0 {
-		c.MaxWindowSize = 0x40000 // 256KB
-	}
-	if c.AcceptBacklog == 0 {
-		c.AcceptBacklog = 128
-	}
-	if c.NewFramer == nil {
-		c.NewFramer = frame.NewFramer
-	}
-	if c.newStream == nil {
-		c.newStream = newStream
-	}
-	if c.writeFrameQueueDepth == 0 {
-		c.writeFrameQueueDepth = 64
-	}
+	c.initOnce.Do(func() {
+		if c.MaxWindowSize == 0 {
+			c.MaxWindowSize = 0x40000 // 256KB
+		}
+		if c.AcceptBacklog == 0 {
+			c.AcceptBacklog = 128
+		}
+		if c.NewFramer == nil {
+			c.NewFramer = frame.NewFramer
+		}
+		if c.newStream == nil {
+			c.newStream = newStream
+		}
+		if c.writeFrameQueueDepth == 0 {
+			c.writeFrameQueueDepth = 64
+		}
+	})
 }
