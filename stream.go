@@ -186,7 +186,7 @@ func (s *stream) handleStreamData(f *frame.Data) error {
 }
 
 func (s *stream) handleStreamRst(f *frame.Rst) error {
-	s.closeWith(newErr(ErrorCode(f.ErrorCode()), fmt.Errorf("Stream reset by peer: %s", f.ErrorCode())))
+	s.closeWith(newErr(ErrorCode(f.ErrorCode()), fmt.Errorf("Stream reset by peer with remote error code: %d", f.ErrorCode())))
 	return nil
 }
 
