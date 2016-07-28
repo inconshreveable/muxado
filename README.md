@@ -17,6 +17,7 @@ implements the net.Listener interface and muxado.Stream implements net.Conn.
 
 Here's an example client which responds to simple JSON requests from a server.
 
+```go
     conn, _ := net.Dial("tcp", "example.net:1234")
     sess := muxado.Client(conn)
     for {
@@ -29,9 +30,11 @@ Here's an example client which responds to simple JSON requests from a server.
             json.NewEncoder(str).Encode(response)
         }(stream)
     }
+```
 
 Maybe the client wants to make a request to the server instead of just responding. This is easy as well:
 
+```go
     stream, _ := sess.Open()
     req := Request{
         Query: "What is the meaning of life, the universe and everything?",
@@ -42,6 +45,7 @@ Maybe the client wants to make a request to the server instead of just respondin
     if resp.Answer != "42" {
         panic("wrong answer to the ultimate question!")
     }
+```
 
 ## Terminology
 muxado defines the following terms for clarity of the documentation:
