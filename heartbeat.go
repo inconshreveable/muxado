@@ -64,15 +64,16 @@ func (h *Heartbeat) Close() error {
 }
 
 func (h *Heartbeat) AcceptTypedStream() (TypedStream, error) {
-	str, err := h.TypedStreamSession.AcceptTypedStream()
-	if err != nil {
-		return nil, err
+	for {
+		str, err := h.TypedStreamSession.AcceptTypedStream()
+		if err != nil {
+			return nil, err
+		}
+		if str.StreamType() != h.config.Type {
+			return str, nil
+		}
+		go h.responder(str)
 	}
-	if str.StreamType() != h.config.Type {
-		return str, err
-	}
-	go h.responder(str)
-	return h.AcceptTypedStream()
 }
 
 func (h *Heartbeat) Start() {
