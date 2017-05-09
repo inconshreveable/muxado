@@ -71,6 +71,7 @@ type Session struct {
 	dead              chan deadReason                  // dead
 	isLocal           parityFn                         // determines if a stream id is local or remote
 	exts              map[frame.StreamType]chan stream // map of extension stream type -> accept channel for the extension
+	al                sync.Mutex                       // mutex to prevent recurring race condition during shutdown
 }
 
 func NewSession(conn net.Conn, newStream streamFactory, isClient bool, exts []Extension) ISession {
@@ -240,7 +241,9 @@ func (s *Session) die(errorCode frame.ErrorCode, err error) error {
 	s.GoAway(errorCode, []byte(err.Error()))
 
 	// now we're safe to stop accepting incoming connections
+	s.al.Lock()
 	close(s.accept)
+	s.al.Unlock()
 
 	// we cleaned up as best as possible, close the transport
 	s.transport.Close()
@@ -340,7 +343,9 @@ func (s *Session) handleFrame(rf frame.RFrame) {
 		}
 
 		// put the new stream on the accept channel
+		s.al.Lock()
 		s.accept <- str
+		s.al.Unlock()
 
 	case *frame.RStreamData:
 		if str := s.getStream(f.StreamId()); str != nil {
