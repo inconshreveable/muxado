@@ -23,7 +23,7 @@ func (f *Data) Reader() io.Reader {
 	return &f.toRead
 }
 
-// Returns the data this
+// Bytes returns the data this
 func (f *Data) Bytes() []byte {
 	return f.toWrite
 }
