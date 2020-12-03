@@ -247,7 +247,9 @@ func poolPut(x interface{}) {
 func (s *session) writeFrame(f frame.Frame, dl time.Time) error {
 	var timeout <-chan time.Time
 	if !dl.IsZero() {
-		timeout = time.After(dl.Sub(time.Now()))
+		t := time.NewTimer(dl.Sub(time.Now()))
+		defer t.Stop()
+		timeout = t.C
 	}
 	var req = writeReq{f: f, err: poolGet().(chan error)}
 	select {
